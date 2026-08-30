@@ -66,7 +66,7 @@ export default function VendasPage() {
 
   function openCreate() {
     setSaleForm(EMPTY_SALE_FORM);
-    setItems([{ productId: '', quantity: 1 }]);
+    setItems([{ productId: '', quantity: 1, unitPrice: '' }]);
     setModalOpen(true);
   }
 
@@ -74,19 +74,35 @@ export default function VendasPage() {
     setItems((prev) => prev.map((it, i) => (i === index ? { ...it, ...patch } : it)));
   }
 
+  function selectProductForItem(index, productId) {
+    const p = products.find((prod) => String(prod.id) === String(productId));
+    updateItem(index, {
+      productId,
+      // Preenche o valor com o preço de tabela do produto, mas o campo continua
+      // editável — permite vender por um valor diferente do cadastrado.
+      unitPrice: p ? String(p.price) : '',
+    });
+  }
+
   function addItemRow() {
-    setItems((prev) => [...prev, { productId: '', quantity: 1 }]);
+    setItems((prev) => [...prev, { productId: '', quantity: 1, unitPrice: '' }]);
   }
 
   function removeItemRow(index) {
     setItems((prev) => prev.filter((_, i) => i !== index));
   }
 
+  function itemUnitPrice(it) {
+    if (it.unitPrice !== '' && it.unitPrice !== undefined && it.unitPrice !== null) return Number(it.unitPrice);
+    const p = products.find((prod) => String(prod.id) === String(it.productId));
+    return p ? Number(p.price) : 0;
+  }
+
   function estimateTotal() {
     let subtotal = 0;
     items.forEach((it) => {
-      const p = products.find((prod) => String(prod.id) === String(it.productId));
-      if (p) subtotal += Number(p.price) * Number(it.quantity || 0);
+      if (!it.productId) return;
+      subtotal += itemUnitPrice(it) * Number(it.quantity || 0);
     });
     return subtotal - Number(saleForm.discount || 0) + Number(saleForm.surcharge || 0);
   }
@@ -100,7 +116,11 @@ export default function VendasPage() {
         customerId: saleForm.customerId || null,
         items: items
           .filter((it) => it.productId)
-          .map((it) => ({ productId: Number(it.productId), quantity: Number(it.quantity) })),
+          .map((it) => ({
+            productId: Number(it.productId),
+            quantity: Number(it.quantity),
+            unitPrice: itemUnitPrice(it),
+          })),
         paymentMethod: saleForm.paymentMethod,
         saleType: saleForm.saleType,
         discount: Number(saleForm.discount) || 0,
@@ -187,7 +207,7 @@ export default function VendasPage() {
             <div className="space-y-2">
               {items.map((item, idx) => (
                 <div key={idx} className="flex items-center gap-2">
-                  <Select className="flex-1" value={item.productId} onChange={(e) => updateItem(idx, { productId: e.target.value })}>
+                  <Select className="flex-1" value={item.productId} onChange={(e) => selectProductForItem(idx, e.target.value)}>
                     <option value="">Selecione o produto...</option>
                     {products.map((p) => (
                       <option key={p.id} value={p.id} disabled={p.quantity <= 0}>
@@ -197,8 +217,15 @@ export default function VendasPage() {
                   </Select>
                   <Input
                     type="number" min="1" className="w-20"
+                    placeholder="Qtd"
                     value={item.quantity}
                     onChange={(e) => updateItem(idx, { quantity: e.target.value })}
+                  />
+                  <Input
+                    type="number" min="0" step="0.01" className="w-28"
+                    placeholder="Valor un."
+                    value={item.unitPrice ?? ''}
+                    onChange={(e) => updateItem(idx, { unitPrice: e.target.value })}
                   />
                   {items.length > 1 && (
                     <button type="button" onClick={() => removeItemRow(idx)} className="text-bordeaux">✕</button>
@@ -206,6 +233,7 @@ export default function VendasPage() {
                 </div>
               ))}
             </div>
+            <p className="mt-1 text-xs text-mist">O valor unitário vem preenchido com o preço cadastrado do produto, mas pode ser alterado para essa venda.</p>
             <button type="button" onClick={addItemRow} className="mt-2 text-xs text-gold hover:underline">+ adicionar item</button>
           </div>
 

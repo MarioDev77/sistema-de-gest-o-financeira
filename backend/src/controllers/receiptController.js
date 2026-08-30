@@ -64,6 +64,56 @@ async function createReceipt(req, res, next) {
   }
 }
 
+async function updateReceipt(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    const { personName, amount, receiptDate, paymentMethod, notes } = req.body;
+
+    if (!personName || !personName.trim()) return res.status(400).json({ error: 'Nome da pessoa é obrigatório.' });
+    if (!amount || Number(amount) <= 0) return res.status(400).json({ error: 'Valor recebido inválido.' });
+    if (!receiptDate) return res.status(400).json({ error: 'Data do recebimento é obrigatória.' });
+    if (paymentMethod && !PAYMENT_METHODS.includes(paymentMethod)) {
+      return res.status(400).json({ error: 'Forma de pagamento inválida.' });
+    }
+
+    const result = await withTransaction(async (client) => {
+      const { rows: existing } = await client.query(
+        'SELECT * FROM receipts WHERE id = $1 AND deleted_at IS NULL FOR UPDATE', [id]
+      );
+      if (existing.length === 0) {
+        const err = new Error('Recibo não encontrado.');
+        err.status = 404;
+        throw err;
+      }
+      const old = existing[0];
+
+      const { rows: updated } = await client.query(
+        `UPDATE receipts SET person_name = $1, amount = $2, receipt_date = $3, payment_method = $4, notes = $5
+         WHERE id = $6 RETURNING *`,
+        [personName.trim(), amount, receiptDate, paymentMethod || null, notes || null, id]
+      );
+
+      // Se o recibo ainda está ativo, mantém o lançamento de caixa correspondente
+      // em sincronia com o novo valor/nome (recibos cancelados já foram
+      // estornados e não devem ser tocados aqui).
+      if (old.status === 'ativo') {
+        await client.query(
+          `UPDATE cash_movements SET amount = $1, description = $2
+           WHERE reference_type = 'receipt' AND reference_id = $3 AND direction = 'entrada'`,
+          [amount, `Recebido de ${personName.trim()}`, id]
+        );
+      }
+
+      return { old, updated: updated[0] };
+    });
+
+    await logAudit({ userId: req.user.id, action: 'update', tableName: 'receipts', recordId: id, oldData: result.old, newData: result.updated, req });
+    res.json({ receipt: result.updated });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function cancelReceipt(req, res, next) {
   try {
     const id = Number(req.params.id);
@@ -92,4 +142,4 @@ async function cancelReceipt(req, res, next) {
   }
 }
 
-module.exports = { listReceipts, createReceipt, cancelReceipt };
+module.exports = { listReceipts, createReceipt, updateReceipt, cancelReceipt };

@@ -1,7 +1,7 @@
 const express = require('express');
 const {
   listLoans, getLoan, createLoan, updateLoan, payLoanInstallment,
-  receiveLoanPayment, listInterestPayments, cancelLoan,
+  receiveLoanPayment, editLoanPayment, listInterestPayments, cancelLoan,
 } = require('../controllers/loanController');
 const { authenticate, requireRole } = require('../middlewares/auth');
 
@@ -17,6 +17,7 @@ router.get('/:id', getLoan);
 router.post('/', createLoan);
 router.put('/:id', updateLoan);
 router.post('/:id/receive', receiveLoanPayment);
+router.put('/payments/:id', editLoanPayment);
 router.post('/installments/:id/pay', payLoanInstallment);
 router.post('/:id/cancel', cancelLoan);
 

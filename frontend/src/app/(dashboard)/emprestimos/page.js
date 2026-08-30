@@ -30,6 +30,14 @@ const EMPTY_RECEIVE_FORM = {
   interestAmount: '', principalAmount: '', paymentMethod: 'dinheiro', notes: '',
 };
 
+const EMPTY_RECEIPT_EDIT_FORM = {
+  personName: '', amount: '', receiptDate: '', paymentMethod: 'dinheiro', notes: '',
+};
+
+const EMPTY_PAYMENT_EDIT_FORM = {
+  interestAmount: '', principalAmount: '', paymentDate: '', paymentMethod: 'dinheiro', notes: '',
+};
+
 export default function EmprestimosPage() {
   const api = useApiClient();
   const [loans, setLoans] = useState([]);
@@ -60,6 +68,16 @@ export default function EmprestimosPage() {
   const [interestPayments, setInterestPayments] = useState([]);
   const [interestTotal, setInterestTotal] = useState(0);
   const [interestLoading, setInterestLoading] = useState(false);
+
+  const [receiptEditModalOpen, setReceiptEditModalOpen] = useState(false);
+  const [receiptEditForm, setReceiptEditForm] = useState(EMPTY_RECEIPT_EDIT_FORM);
+  const [editingReceiptId, setEditingReceiptId] = useState(null);
+  const [savingReceiptEdit, setSavingReceiptEdit] = useState(false);
+
+  const [paymentEditModalOpen, setPaymentEditModalOpen] = useState(false);
+  const [paymentEditForm, setPaymentEditForm] = useState(EMPTY_PAYMENT_EDIT_FORM);
+  const [editingPaymentId, setEditingPaymentId] = useState(null);
+  const [savingPaymentEdit, setSavingPaymentEdit] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -222,6 +240,80 @@ export default function EmprestimosPage() {
     }
   }
 
+  function openEditReceipt(receipt) {
+    setEditingReceiptId(receipt.id);
+    setReceiptEditForm({
+      personName: receipt.person_name || '',
+      amount: receipt.amount,
+      receiptDate: receipt.receipt_date ? receipt.receipt_date.slice(0, 10) : '',
+      paymentMethod: receipt.payment_method || 'dinheiro',
+      notes: receipt.notes || '',
+    });
+    setReceiptEditModalOpen(true);
+  }
+
+  async function handleReceiptEditSubmit(e) {
+    e.preventDefault();
+    setSavingReceiptEdit(true);
+    setError('');
+    try {
+      await api.put(`/receipts/${editingReceiptId}`, {
+        ...receiptEditForm,
+        amount: Number(receiptEditForm.amount),
+      });
+      setReceiptEditModalOpen(false);
+      await loadReceipts();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingReceiptEdit(false);
+    }
+  }
+
+  function openEditPayment(payment) {
+    setEditingPaymentId(payment.id);
+    setPaymentEditForm({
+      interestAmount: payment.interest_portion || '0',
+      principalAmount: payment.principal_portion || '0',
+      paymentDate: payment.payment_date ? payment.payment_date.slice(0, 10) : '',
+      paymentMethod: payment.payment_method || 'dinheiro',
+      notes: payment.notes || '',
+    });
+    setPaymentEditModalOpen(true);
+  }
+
+  async function handlePaymentEditSubmit(e) {
+    e.preventDefault();
+    setSavingPaymentEdit(true);
+    setError('');
+    try {
+      await api.put(`/loans/payments/${editingPaymentId}`, {
+        interestAmount: Number(paymentEditForm.interestAmount) || 0,
+        principalAmount: Number(paymentEditForm.principalAmount) || 0,
+        paymentDate: paymentEditForm.paymentDate || null,
+        paymentMethod: paymentEditForm.paymentMethod,
+        notes: paymentEditForm.notes,
+      });
+      setPaymentEditModalOpen(false);
+      // Atualiza tudo que pode ter mudado: lista de empréstimos, detalhe aberto
+      // e a lista de juros recebidos (se estiver aberta).
+      await load();
+      if (detail) {
+        const data = await api.get(`/loans/${detail.loan.id}`);
+        setDetail(data);
+      }
+      if (interestModalOpen) {
+        const data = await api.get('/loans/payments/interest');
+        setInterestPayments(data.payments);
+        setInterestTotal(data.total);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingPaymentEdit(false);
+    }
+  }
+
   async function openInterestModal() {
     setInterestModalOpen(true);
     setInterestLoading(true);
@@ -292,7 +384,10 @@ export default function EmprestimosPage() {
               { key: 'status', label: 'Status', render: (r) => <Badge status={r.status} /> },
               { key: 'actions', label: '', render: (r) => (
                 r.status !== 'cancelado' && (
-                  <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => handleCancelReceipt(r.id)}>Cancelar</Button>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => openEditReceipt(r)}>Editar</Button>
+                    <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => handleCancelReceipt(r.id)}>Cancelar</Button>
+                  </div>
                 )
               ) },
             ]}
@@ -365,6 +460,61 @@ export default function EmprestimosPage() {
         </form>
       </Modal>
 
+      <Modal open={receiptEditModalOpen} onClose={() => setReceiptEditModalOpen(false)} title="Editar recibo">
+        <form onSubmit={handleReceiptEditSubmit} className="grid grid-cols-1 gap-4">
+          <Field label="Nome da pessoa"><Input required value={receiptEditForm.personName} onChange={(e) => setReceiptEditForm({ ...receiptEditForm, personName: e.target.value })} /></Field>
+          <Field label="Valor recebido (R$)"><Input type="number" step="0.01" required value={receiptEditForm.amount} onChange={(e) => setReceiptEditForm({ ...receiptEditForm, amount: e.target.value })} /></Field>
+          <Field label="Data do recebimento"><Input type="date" required value={receiptEditForm.receiptDate} onChange={(e) => setReceiptEditForm({ ...receiptEditForm, receiptDate: e.target.value })} /></Field>
+          <Field label="Forma de pagamento">
+            <Select value={receiptEditForm.paymentMethod} onChange={(e) => setReceiptEditForm({ ...receiptEditForm, paymentMethod: e.target.value })}>
+              <option value="dinheiro">Dinheiro</option>
+              <option value="pix">PIX</option>
+              <option value="debito">Débito</option>
+              <option value="credito">Crédito</option>
+              <option value="transferencia">Transferência</option>
+              <option value="outros">Outros</option>
+            </Select>
+          </Field>
+          <Field label="Observações"><TextArea rows={2} value={receiptEditForm.notes} onChange={(e) => setReceiptEditForm({ ...receiptEditForm, notes: e.target.value })} /></Field>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="ghost" onClick={() => setReceiptEditModalOpen(false)}>Cancelar</Button>
+            <Button type="submit" disabled={savingReceiptEdit}>{savingReceiptEdit ? 'Salvando...' : 'Salvar alterações'}</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={paymentEditModalOpen} onClose={() => setPaymentEditModalOpen(false)} title="Editar recebimento">
+        <form onSubmit={handlePaymentEditSubmit} className="grid grid-cols-1 gap-4">
+          <p className="text-xs text-mist">
+            O caixa (Fluxo de Caixa) é ajustado automaticamente pela diferença entre o valor antigo e o novo.
+          </p>
+          <Field label="Juros recebido (R$)">
+            <Input type="number" step="0.01" min="0" value={paymentEditForm.interestAmount}
+              onChange={(e) => setPaymentEditForm({ ...paymentEditForm, interestAmount: e.target.value })} />
+          </Field>
+          <Field label="Abatimento do capital (R$)">
+            <Input type="number" step="0.01" min="0" value={paymentEditForm.principalAmount}
+              onChange={(e) => setPaymentEditForm({ ...paymentEditForm, principalAmount: e.target.value })} />
+          </Field>
+          <Field label="Data do recebimento"><Input type="date" value={paymentEditForm.paymentDate} onChange={(e) => setPaymentEditForm({ ...paymentEditForm, paymentDate: e.target.value })} /></Field>
+          <Field label="Forma de pagamento">
+            <Select value={paymentEditForm.paymentMethod} onChange={(e) => setPaymentEditForm({ ...paymentEditForm, paymentMethod: e.target.value })}>
+              <option value="dinheiro">Dinheiro</option>
+              <option value="pix">PIX</option>
+              <option value="debito">Débito</option>
+              <option value="credito">Crédito</option>
+              <option value="transferencia">Transferência</option>
+              <option value="outros">Outros</option>
+            </Select>
+          </Field>
+          <Field label="Observações"><Input value={paymentEditForm.notes} onChange={(e) => setPaymentEditForm({ ...paymentEditForm, notes: e.target.value })} /></Field>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="ghost" onClick={() => setPaymentEditModalOpen(false)}>Cancelar</Button>
+            <Button type="submit" disabled={savingPaymentEdit}>{savingPaymentEdit ? 'Salvando...' : 'Salvar alterações'}</Button>
+          </div>
+        </form>
+      </Modal>
+
       <Modal open={interestModalOpen} onClose={() => setInterestModalOpen(false)} title="Juros recebidos" wide>
         <div className="space-y-4 text-sm">
           <div className="rounded-md bg-parchment-soft p-3 text-center dark:bg-ink">
@@ -381,6 +531,9 @@ export default function EmprestimosPage() {
                 { key: 'interest_portion', label: 'Juros', align: 'right', render: (r) => money(r.interest_portion) },
                 { key: 'principal_portion', label: 'Principal', align: 'right', render: (r) => money(r.principal_portion) },
                 { key: 'payment_method', label: 'Forma', render: (r) => paymentMethodLabel(r.payment_method) },
+                { key: 'actions', label: '', render: (r) => (
+                  <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => openEditPayment(r)}>Editar</Button>
+                ) },
               ]}
               rows={interestPayments}
               emptyLabel="Nenhum juro recebido ainda."
@@ -476,6 +629,9 @@ export default function EmprestimosPage() {
                     { key: 'principal_portion', label: 'Principal', align: 'right', render: (r) => money(r.principal_portion) },
                     { key: 'interest_portion', label: 'Juros', align: 'right', render: (r) => money(r.interest_portion) },
                     { key: 'payment_method', label: 'Forma', render: (r) => paymentMethodLabel(r.payment_method) },
+                    { key: 'actions', label: '', render: (r) => (
+                      <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => openEditPayment(r)}>Editar</Button>
+                    ) },
                   ]}
                   rows={detail.payments}
                   emptyLabel="Nenhum valor recebido ainda."

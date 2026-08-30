@@ -339,6 +339,135 @@ async function receiveLoanPayment(req, res, next) {
 }
 
 /**
+ * Edita um recebimento já lançado (valor, divisão juros/principal, data,
+ * forma de pagamento, observações). Usado tanto pela lista "Juros recebidos"
+ * quanto pela aba "Recebido" dentro do empréstimo — corrige coisas como
+ * "registrei R$100 de juros mas na verdade foram R$100 de juros + R$100 de
+ * abatimento do capital".
+ *
+ * Em vez de sobrescrever o lançamento de caixa original (o que apagaria o
+ * histórico), é lançado um ajuste no caixa com a diferença entre o valor
+ * antigo e o novo, para que o saldo final bata com o valor corrigido.
+ */
+async function editLoanPayment(req, res, next) {
+  try {
+    const paymentId = Number(req.params.id);
+    const { interestAmount = 0, principalAmount = 0, paymentDate, paymentMethod, notes } = req.body;
+    const newInterest = Number(interestAmount) || 0;
+    const newPrincipal = Number(principalAmount) || 0;
+    const newTotal = Number((newInterest + newPrincipal).toFixed(2));
+
+    if (newTotal <= 0) return res.status(400).json({ error: 'Informe ao menos um valor de juros ou de abatimento do capital.' });
+    if (!PAYMENT_METHODS.includes(paymentMethod)) return res.status(400).json({ error: 'Forma de pagamento inválida.' });
+
+    const result = await withTransaction(async (client) => {
+      const { rows: paymentRows } = await client.query(
+        `SELECT lp.*, l.person_name, l.status AS loan_status FROM loan_payments lp
+         JOIN loans l ON l.id = lp.loan_id
+         WHERE lp.id = $1 FOR UPDATE`,
+        [paymentId]
+      );
+      if (paymentRows.length === 0) {
+        const err = new Error('Recebimento não encontrado.');
+        err.status = 404;
+        throw err;
+      }
+      const oldPayment = paymentRows[0];
+      const oldPrincipal = Number(oldPayment.principal_portion);
+      const oldInterest = Number(oldPayment.interest_portion);
+      const oldTotal = Number(oldPayment.amount);
+
+      // Se o recebimento está ligado a uma parcela específica, ajusta o valor
+      // pago dela pela diferença e recalcula o status.
+      if (oldPayment.installment_id) {
+        const { rows: instRows } = await client.query(
+          'SELECT * FROM loan_installments WHERE id = $1 FOR UPDATE', [oldPayment.installment_id]
+        );
+        if (instRows.length > 0) {
+          const inst = instRows[0];
+          const deltaAmount = Number((newTotal - oldTotal).toFixed(2));
+          const newPaid = Number((Number(inst.paid_amount) + deltaAmount).toFixed(2));
+          if (newPaid < -0.01) {
+            const err = new Error('Essa edição deixaria o valor pago da parcela negativo.');
+            err.status = 400;
+            throw err;
+          }
+          if (newPaid > Number(inst.amount) + 0.01) {
+            const err = new Error(`O novo valor excede o total da parcela (R$ ${Number(inst.amount).toFixed(2)}).`);
+            err.status = 400;
+            throw err;
+          }
+          const clampedPaid = Math.max(newPaid, 0);
+          const newInstallmentStatus = clampedPaid <= 0.01 ? 'pendente'
+            : (clampedPaid >= Number(inst.amount) - 0.01 ? 'pago' : 'parcial');
+          await client.query(
+            'UPDATE loan_installments SET paid_amount = $1, status = $2 WHERE id = $3',
+            [clampedPaid, newInstallmentStatus, inst.id]
+          );
+        }
+      }
+
+      const { rows: updatedRows } = await client.query(
+        `UPDATE loan_payments SET amount = $1, principal_portion = $2, interest_portion = $3,
+           payment_method = $4, payment_date = COALESCE($5, payment_date), notes = $6
+         WHERE id = $7 RETURNING *`,
+        [newTotal, newPrincipal, newInterest, paymentMethod, paymentDate || null,
+         notes !== undefined ? (notes || null) : oldPayment.notes, paymentId]
+      );
+      const updatedPayment = updatedRows[0];
+
+      // Ajusta o caixa apenas pela diferença, preservando o lançamento original.
+      const deltaPrincipal = Number((newPrincipal - oldPrincipal).toFixed(2));
+      const deltaInterest = Number((newInterest - oldInterest).toFixed(2));
+
+      if (Math.abs(deltaPrincipal) > 0.001) {
+        await client.query(
+          `INSERT INTO cash_movements (direction, category, amount, description, reference_type, reference_id, created_by)
+           VALUES ($1,'recebimento_emprestimo',$2,$3,'loan_payment',$4,$5)`,
+          [deltaPrincipal > 0 ? 'entrada' : 'saida', Math.abs(deltaPrincipal),
+           `Ajuste de recebimento (edição) - ${oldPayment.person_name}`, paymentId, req.user.id]
+        );
+      }
+      if (Math.abs(deltaInterest) > 0.001) {
+        await client.query(
+          `INSERT INTO cash_movements (direction, category, amount, description, reference_type, reference_id, created_by)
+           VALUES ($1,'juros_emprestimo',$2,$3,'loan_payment',$4,$5)`,
+          [deltaInterest > 0 ? 'entrada' : 'saida', Math.abs(deltaInterest),
+           `Ajuste de juros (edição) - ${oldPayment.person_name}`, paymentId, req.user.id]
+        );
+      }
+
+      // Recalcula o status geral do empréstimo com base nas parcelas.
+      if (!['cancelado'].includes(oldPayment.loan_status)) {
+        const { rows: pendingCount } = await client.query(
+          `SELECT COUNT(*) FROM loan_installments WHERE loan_id = $1 AND status NOT IN ('pago','cancelado')`,
+          [oldPayment.loan_id]
+        );
+        const { rows: paidSum } = await client.query(
+          `SELECT COALESCE(SUM(paid_amount), 0) AS total FROM loan_installments WHERE loan_id = $1`,
+          [oldPayment.loan_id]
+        );
+        let loanStatus;
+        if (Number(pendingCount[0].count) === 0) loanStatus = 'pago';
+        else if (Number(paidSum[0].total) > 0) loanStatus = 'parcial';
+        else loanStatus = 'ativo';
+        await client.query('UPDATE loans SET status = $1 WHERE id = $2', [loanStatus, oldPayment.loan_id]);
+      }
+
+      return { oldPayment, updatedPayment };
+    });
+
+    await logAudit({
+      userId: req.user.id, action: 'update', tableName: 'loan_payments', recordId: paymentId,
+      oldData: result.oldPayment, newData: result.updatedPayment, req,
+    });
+    res.json({ payment: result.updatedPayment });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * Lista todos os pagamentos que tiveram alguma parcela de juros — usada pelo
  * botão "Juros recebidos", que mostra o histórico e o total já embolsado.
  */
@@ -375,5 +504,5 @@ async function cancelLoan(req, res, next) {
 
 module.exports = {
   listLoans, getLoan, createLoan, updateLoan, payLoanInstallment,
-  receiveLoanPayment, listInterestPayments, cancelLoan,
+  receiveLoanPayment, editLoanPayment, listInterestPayments, cancelLoan,
 };
