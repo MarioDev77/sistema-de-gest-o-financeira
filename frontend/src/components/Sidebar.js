@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { label: 'Despesas', href: '/despesas', adminOnly: true },
   { label: 'Fluxo de Caixa', href: '/fluxo-caixa', adminOnly: true },
   { label: 'Empréstimos', href: '/emprestimos', adminOnly: true },
+  { label: 'Dívidas', href: '/dividas', adminOnly: true },
   { label: 'Balancete', href: '/balancete', adminOnly: true },
   { label: 'Relatórios', href: '/relatorios', adminOnly: true },
   { label: 'Análise IA', href: '/ia', adminOnly: true },

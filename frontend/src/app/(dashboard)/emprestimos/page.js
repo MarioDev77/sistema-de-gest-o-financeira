@@ -77,6 +77,13 @@ export default function EmprestimosPage() {
   const [interestPayments, setInterestPayments] = useState([]);
   const [interestTotal, setInterestTotal] = useState(0);
   const [interestLoading, setInterestLoading] = useState(false);
+  const [scheduleInstallments, setScheduleInstallments] = useState([]);
+  const [scheduleTotal, setScheduleTotal] = useState(0);
+
+  const [installmentEditModalOpen, setInstallmentEditModalOpen] = useState(false);
+  const [installmentEditForm, setInstallmentEditForm] = useState({ dueDate: '', amount: '' });
+  const [editingInstallmentId, setEditingInstallmentId] = useState(null);
+  const [savingInstallmentEdit, setSavingInstallmentEdit] = useState(false);
 
   const [receiptEditModalOpen, setReceiptEditModalOpen] = useState(false);
   const [receiptEditForm, setReceiptEditForm] = useState(EMPTY_RECEIPT_EDIT_FORM);
@@ -367,13 +374,50 @@ export default function EmprestimosPage() {
     setInterestModalOpen(true);
     setInterestLoading(true);
     try {
-      const data = await api.get('/loans/payments/interest');
-      setInterestPayments(data.payments);
-      setInterestTotal(data.total);
+      const [interestData, scheduleData] = await Promise.all([
+        api.get('/loans/payments/interest'),
+        api.get('/loans/installments/schedule'),
+      ]);
+      setInterestPayments(interestData.payments);
+      setInterestTotal(interestData.total);
+      setScheduleInstallments(scheduleData.installments);
+      setScheduleTotal(scheduleData.totalInterest);
     } catch (err) {
       setError(err.message);
     } finally {
       setInterestLoading(false);
+    }
+  }
+
+  function openEditInstallment(inst) {
+    setEditingInstallmentId(inst.id);
+    setInstallmentEditForm({
+      dueDate: inst.due_date ? inst.due_date.slice(0, 10) : '',
+      amount: inst.amount,
+    });
+    setInstallmentEditModalOpen(true);
+  }
+
+  async function handleInstallmentEditSubmit(e) {
+    e.preventDefault();
+    setSavingInstallmentEdit(true);
+    setError('');
+    try {
+      await api.put(`/loans/installments/${editingInstallmentId}`, {
+        dueDate: installmentEditForm.dueDate || null,
+        amount: installmentEditForm.amount === '' ? undefined : Number(installmentEditForm.amount),
+      });
+      setInstallmentEditModalOpen(false);
+      await openInterestModal();
+      await load();
+      if (detail) {
+        const data = await api.get(`/loans/${detail.loan.id}`);
+        setDetail(data);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingInstallmentEdit(false);
     }
   }
 
@@ -391,7 +435,7 @@ export default function EmprestimosPage() {
     { key: 'total_amount', label: 'Total', align: 'right', render: (r) => money(r.total_amount) },
     { key: 'received', label: 'Recebido', align: 'right', render: (r) => money(r.received) },
     { key: 'remaining', label: 'Restante', align: 'right', render: (r) => money(r.remaining) },
-    { key: 'due_date', label: 'Vencimento', render: (r) => r.is_open_ended ? 'Indeterminado' : shortDate(r.due_date) },
+    { key: 'loan_date', label: 'Data do empréstimo', render: (r) => shortDate(r.loan_date) },
     { key: 'status', label: 'Status', render: (r) => <Badge status={r.status} /> },
     { key: 'actions', label: '', render: (r) => (
       <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => openEditFromRow(r)}>Editar</Button>
@@ -405,7 +449,7 @@ export default function EmprestimosPage() {
         title="Empréstimos"
         action={(
           <div className="flex gap-2">
-            <Button variant="ghost" onClick={openInterestModal}>Juros recebidos</Button>
+            <Button variant="ghost" onClick={openInterestModal}>Juros por mês</Button>
             <Button variant="ghost" onClick={() => setReceiptModalOpen(true)}>+ Recibo</Button>
             <Button onClick={() => setModalOpen(true)}>+ Novo empréstimo</Button>
           </div>
@@ -623,31 +667,81 @@ export default function EmprestimosPage() {
         </form>
       </Modal>
 
-      <Modal open={interestModalOpen} onClose={() => setInterestModalOpen(false)} title="Juros recebidos" wide>
+      <Modal open={interestModalOpen} onClose={() => setInterestModalOpen(false)} title="Juros por mês" wide>
         <div className="space-y-4 text-sm">
-          <div className="rounded-md bg-parchment-soft p-3 text-center dark:bg-ink">
-            <p className="text-xs text-mist">Total de juros recebidos</p>
-            <p className="figures text-lg">{money(interestTotal)}</p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="rounded-md bg-parchment-soft p-3 text-center dark:bg-ink">
+              <p className="text-xs text-mist">Total de juros previsto (todas as parcelas)</p>
+              <p className="figures text-lg">{money(scheduleTotal)}</p>
+            </div>
+            <div className="rounded-md bg-parchment-soft p-3 text-center dark:bg-ink">
+              <p className="text-xs text-mist">Total de juros já recebido</p>
+              <p className="figures text-lg">{money(interestTotal)}</p>
+            </div>
           </div>
           {interestLoading ? (
             <p className="text-mist">Carregando...</p>
           ) : (
-            <Table
-              columns={[
-                { key: 'person_name', label: 'Pessoa' },
-                { key: 'payment_date', label: 'Recebido em', render: (r) => dateTime(r.payment_date) },
-                { key: 'interest_portion', label: 'Juros', align: 'right', render: (r) => money(r.interest_portion) },
-                { key: 'principal_portion', label: 'Principal', align: 'right', render: (r) => money(r.principal_portion) },
-                { key: 'payment_method', label: 'Forma', render: (r) => paymentMethodLabel(r.payment_method) },
-                { key: 'actions', label: '', render: (r) => (
-                  <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => openEditPayment(r)}>Editar</Button>
-                ) },
-              ]}
-              rows={interestPayments}
-              emptyLabel="Nenhum juro recebido ainda."
-            />
+            <Tabs tabs={[
+              { key: 'parcelas', label: `Parcelas do mês (${scheduleInstallments.length})` },
+              { key: 'recebidos', label: `Recebidos (${interestPayments.length})` },
+            ]}>
+              {(active) => active === 'parcelas' ? (
+                <Table
+                  columns={[
+                    { key: 'person_name', label: 'Pessoa' },
+                    { key: 'installment_number', label: 'Parcela' },
+                    { key: 'due_date', label: 'Vencimento', render: (r) => shortDate(r.due_date) },
+                    { key: 'interest_amount', label: 'Juros previsto', align: 'right', render: (r) => money(r.interest_amount) },
+                    { key: 'amount', label: 'Valor total', align: 'right', render: (r) => money(r.amount) },
+                    { key: 'status', label: 'Status', render: (r) => <Badge status={r.status} /> },
+                    { key: 'actions', label: '', render: (r) => (
+                      <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => openEditInstallment(r)}>Editar</Button>
+                    ) },
+                  ]}
+                  rows={scheduleInstallments}
+                  emptyLabel="Nenhuma parcela cadastrada ainda."
+                />
+              ) : (
+                <Table
+                  columns={[
+                    { key: 'person_name', label: 'Pessoa' },
+                    { key: 'installment_due_date', label: 'Venc. da parcela', render: (r) => r.installment_due_date ? shortDate(r.installment_due_date) : '—' },
+                    { key: 'payment_date', label: 'Recebido em', render: (r) => dateTime(r.payment_date) },
+                    { key: 'interest_portion', label: 'Juros', align: 'right', render: (r) => money(r.interest_portion) },
+                    { key: 'principal_portion', label: 'Principal', align: 'right', render: (r) => money(r.principal_portion) },
+                    { key: 'payment_method', label: 'Forma', render: (r) => paymentMethodLabel(r.payment_method) },
+                    { key: 'actions', label: '', render: (r) => (
+                      <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => openEditPayment(r)}>Editar</Button>
+                    ) },
+                  ]}
+                  rows={interestPayments}
+                  emptyLabel="Nenhum juro recebido ainda."
+                />
+              )}
+            </Tabs>
           )}
         </div>
+      </Modal>
+
+      <Modal open={installmentEditModalOpen} onClose={() => setInstallmentEditModalOpen(false)} title="Editar parcela">
+        <form onSubmit={handleInstallmentEditSubmit} className="grid grid-cols-1 gap-4">
+          <Field label="Data de vencimento">
+            <Input type="date" required value={installmentEditForm.dueDate}
+              onChange={(e) => setInstallmentEditForm({ ...installmentEditForm, dueDate: e.target.value })} />
+          </Field>
+          <Field label="Valor da parcela (R$)">
+            <CurrencyInput value={installmentEditForm.amount}
+              onValueChange={(v) => setInstallmentEditForm({ ...installmentEditForm, amount: v })} />
+          </Field>
+          <p className="text-xs text-mist">
+            Se a parcela já tiver algum valor recebido, só a data de vencimento pode ser alterada.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="ghost" onClick={() => setInstallmentEditModalOpen(false)}>Cancelar</Button>
+            <Button type="submit" disabled={savingInstallmentEdit}>{savingInstallmentEdit ? 'Salvando...' : 'Salvar alterações'}</Button>
+          </div>
+        </form>
       </Modal>
 
       <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title={detail ? detail.loan.person_name : ''} wide>

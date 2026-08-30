@@ -2,6 +2,7 @@ const express = require('express');
 const {
   listLoans, getLoan, createLoan, updateLoan, payLoanInstallment,
   receiveLoanPayment, editLoanPayment, listInterestPayments, cancelLoan,
+  listInstallmentsSchedule, updateInstallment,
 } = require('../controllers/loanController');
 const { authenticate, requireRole } = require('../middlewares/auth');
 
@@ -13,11 +14,13 @@ router.use(authenticate, requireRole('admin'));
 
 router.get('/', listLoans);
 router.get('/payments/interest', listInterestPayments);
+router.get('/installments/schedule', listInstallmentsSchedule);
 router.get('/:id', getLoan);
 router.post('/', createLoan);
 router.put('/:id', updateLoan);
 router.post('/:id/receive', receiveLoanPayment);
 router.put('/payments/:id', editLoanPayment);
+router.put('/installments/:id', updateInstallment);
 router.post('/installments/:id/pay', payLoanInstallment);
 router.post('/:id/cancel', cancelLoan);
 

@@ -96,6 +96,11 @@ async function createLoan(req, res, next) {
       // e abatimento do capital) são lançados livremente via /loans/:id/receive,
       // mês a mês, sem uma data de vencimento pré-definida.
       if (!isOpenEnded) {
+        // Proporção de juros dentro do total, para já lançar cada parcela com
+        // seu pedaço de juros e de principal separados — é o que alimenta a
+        // aba "Juros por mês" assim que o empréstimo é criado, sem precisar
+        // esperar nenhum recebimento ser registrado.
+        const interestRatio = totalAmount > 0 ? (totalAmount - principalAmount) / totalAmount : 0;
         const perInstallment = Math.floor((totalAmount / installmentsCount) * 100) / 100;
         const baseDate = new Date(loanDate);
         let allocated = 0;
@@ -106,11 +111,13 @@ async function createLoan(req, res, next) {
           allocated += amount;
           const due = new Date(baseDate);
           due.setMonth(due.getMonth() + i);
+          const interestAmount = Number((amount * interestRatio).toFixed(2));
+          const principalPortion = Number((amount - interestAmount).toFixed(2));
 
           const { rows: instRows } = await client.query(
-            `INSERT INTO loan_installments (loan_id, installment_number, due_date, amount)
-             VALUES ($1,$2,$3,$4) RETURNING *`,
-            [loan.id, i, due.toISOString().slice(0, 10), amount]
+            `INSERT INTO loan_installments (loan_id, installment_number, due_date, amount, interest_amount, principal_amount)
+             VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+            [loan.id, i, due.toISOString().slice(0, 10), amount, interestAmount, principalPortion]
           );
           installments.push(instRows[0]);
         }
@@ -204,6 +211,7 @@ async function updateLoan(req, res, next) {
         if (!hasPayments) {
           await client.query('DELETE FROM loan_installments WHERE loan_id = $1', [id]);
           if (!nextOpenEnded) {
+            const interestRatio = nextTotal > 0 ? (nextTotal - nextPrincipal) / nextTotal : 0;
             const perInstallment = Math.floor((nextTotal / nextInstallmentsCount) * 100) / 100;
             const baseDate = new Date(nextLoanDate);
             let allocated = 0;
@@ -213,10 +221,12 @@ async function updateLoan(req, res, next) {
               allocated += amount;
               const due = new Date(baseDate);
               due.setMonth(due.getMonth() + i);
+              const interestAmount = Number((amount * interestRatio).toFixed(2));
+              const principalPortion = Number((amount - interestAmount).toFixed(2));
               await client.query(
-                `INSERT INTO loan_installments (loan_id, installment_number, due_date, amount)
-                 VALUES ($1,$2,$3,$4)`,
-                [id, i, due.toISOString().slice(0, 10), amount]
+                `INSERT INTO loan_installments (loan_id, installment_number, due_date, amount, interest_amount, principal_amount)
+                 VALUES ($1,$2,$3,$4,$5,$6)`,
+                [id, i, due.toISOString().slice(0, 10), amount, interestAmount, principalPortion]
               );
             }
           }
@@ -567,17 +577,96 @@ async function editLoanPayment(req, res, next) {
 /**
  * Lista todos os pagamentos que tiveram alguma parcela de juros — usada pelo
  * botão "Juros recebidos", que mostra o histórico e o total já embolsado.
+ * Traz também a data de vencimento da parcela original (quando o recebimento
+ * está ligado a uma), para o usuário conferir quando aquele juro vencia.
  */
 async function listInterestPayments(req, res, next) {
   try {
     const { rows } = await query(
-      `SELECT lp.*, l.person_name FROM loan_payments lp
+      `SELECT lp.*, l.person_name, li.due_date AS installment_due_date
+       FROM loan_payments lp
        JOIN loans l ON l.id = lp.loan_id
+       LEFT JOIN loan_installments li ON li.id = lp.installment_id
        WHERE lp.interest_portion > 0
        ORDER BY lp.payment_date DESC`
     );
     const total = rows.reduce((sum, r) => sum + Number(r.interest_portion), 0);
     res.json({ payments: rows, total });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Aba "Juros por mês": mostra todas as parcelas de todos os empréstimos
+ * (pagas ou não) já com a data de vencimento e o juro previsto para aquele
+ * mês. É alimentada automaticamente assim que um empréstimo é criado — não
+ * depende de nenhum recebimento ter sido lançado ainda.
+ */
+async function listInstallmentsSchedule(req, res, next) {
+  try {
+    await refreshOverdueLoans();
+    const { rows } = await query(
+      `SELECT li.*, l.person_name, l.is_open_ended
+       FROM loan_installments li
+       JOIN loans l ON l.id = li.loan_id
+       WHERE l.deleted_at IS NULL AND li.status <> 'cancelado'
+       ORDER BY li.due_date ASC`
+    );
+    const totalInterest = rows.reduce((sum, r) => sum + Number(r.interest_amount), 0);
+    res.json({ installments: rows, totalInterest });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Edita uma parcela ainda não paga: data de vencimento e/ou valor. Se o valor
+ * mudar, o juro e o principal daquela parcela são recalculados na mesma
+ * proporção do empréstimo. Parcelas já pagas (total ou parcialmente) só têm a
+ * data de vencimento editável, para não descasar valores já recebidos.
+ */
+async function updateInstallment(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    const { dueDate, amount } = req.body;
+
+    const { rows } = await query(
+      `SELECT li.*, l.principal_amount AS loan_principal_amount, l.total_amount AS loan_total_amount
+       FROM loan_installments li
+       JOIN loans l ON l.id = li.loan_id WHERE li.id = $1`,
+      [id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Parcela não encontrada.' });
+    const inst = rows[0];
+    if (inst.status === 'cancelado') return res.status(400).json({ error: 'Esta parcela está cancelada.' });
+
+    const nextDueDate = dueDate || inst.due_date;
+    let nextAmount = Number(inst.amount);
+    let nextInterest = Number(inst.interest_amount);
+    let nextPrincipal = Number(inst.principal_amount);
+
+    if (amount !== undefined && amount !== null && amount !== '') {
+      if (Number(inst.paid_amount) > 0) {
+        return res.status(400).json({ error: 'Esta parcela já tem valor recebido; só a data de vencimento pode ser editada.' });
+      }
+      nextAmount = Number(amount);
+      if (!nextAmount || nextAmount <= 0) return res.status(400).json({ error: 'Valor da parcela inválido.' });
+      // Usa a proporção de juros do empréstimo como um todo.
+      const ratio = Number(inst.loan_total_amount) > 0
+        ? (Number(inst.loan_total_amount) - Number(inst.loan_principal_amount)) / Number(inst.loan_total_amount) : 0;
+      nextInterest = Number((nextAmount * ratio).toFixed(2));
+      nextPrincipal = Number((nextAmount - nextInterest).toFixed(2));
+    }
+
+    const { rows: updated } = await query(
+      `UPDATE loan_installments SET due_date = $1, amount = $2, interest_amount = $3, principal_amount = $4
+       WHERE id = $5 RETURNING *`,
+      [nextDueDate, nextAmount, nextInterest, nextPrincipal, id]
+    );
+
+    await logAudit({ userId: req.user.id, action: 'update', tableName: 'loan_installments', recordId: id, oldData: inst, newData: updated[0], req });
+    res.json({ installment: updated[0] });
   } catch (err) {
     next(err);
   }
@@ -602,4 +691,5 @@ async function cancelLoan(req, res, next) {
 module.exports = {
   listLoans, getLoan, createLoan, updateLoan, payLoanInstallment,
   receiveLoanPayment, editLoanPayment, listInterestPayments, cancelLoan,
+  listInstallmentsSchedule, updateInstallment,
 };
