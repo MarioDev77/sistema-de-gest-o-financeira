@@ -22,6 +22,14 @@ const EMPTY_RECEIPT_FORM = {
   personName: '', amount: '', receiptDate: '', paymentMethod: 'dinheiro', notes: '',
 };
 
+const EMPTY_EDIT_FORM = {
+  personName: '', document: '', phone: '', dueDate: '', notes: '',
+};
+
+const EMPTY_RECEIVE_FORM = {
+  interestAmount: '', principalAmount: '', paymentMethod: 'dinheiro', notes: '',
+};
+
 export default function EmprestimosPage() {
   const api = useApiClient();
   const [loans, setLoans] = useState([]);
@@ -40,6 +48,18 @@ export default function EmprestimosPage() {
   const [receiptModalOpen, setReceiptModalOpen] = useState(false);
   const [receiptForm, setReceiptForm] = useState(EMPTY_RECEIPT_FORM);
   const [savingReceipt, setSavingReceipt] = useState(false);
+
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editForm, setEditForm] = useState(EMPTY_EDIT_FORM);
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const [receiveForm, setReceiveForm] = useState(EMPTY_RECEIVE_FORM);
+  const [savingReceive, setSavingReceive] = useState(false);
+
+  const [interestModalOpen, setInterestModalOpen] = useState(false);
+  const [interestPayments, setInterestPayments] = useState([]);
+  const [interestTotal, setInterestTotal] = useState(0);
+  const [interestLoading, setInterestLoading] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -151,6 +171,71 @@ export default function EmprestimosPage() {
     }
   }
 
+  function openEdit() {
+    if (!detail) return;
+    setEditForm({
+      personName: detail.loan.person_name || '',
+      document: detail.loan.document || '',
+      phone: detail.loan.phone || '',
+      dueDate: detail.loan.due_date ? detail.loan.due_date.slice(0, 10) : '',
+      notes: detail.loan.notes || '',
+    });
+    setEditModalOpen(true);
+  }
+
+  async function handleEditSubmit(e) {
+    e.preventDefault();
+    setSavingEdit(true);
+    setError('');
+    try {
+      await api.put(`/loans/${detail.loan.id}`, editForm);
+      const data = await api.get(`/loans/${detail.loan.id}`);
+      setDetail(data);
+      setEditModalOpen(false);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  async function handleReceiveSubmit(e) {
+    e.preventDefault();
+    setSavingReceive(true);
+    setError('');
+    try {
+      await api.post(`/loans/${detail.loan.id}/receive`, {
+        interestAmount: Number(receiveForm.interestAmount) || 0,
+        principalAmount: Number(receiveForm.principalAmount) || 0,
+        paymentMethod: receiveForm.paymentMethod,
+        notes: receiveForm.notes,
+      });
+      const data = await api.get(`/loans/${detail.loan.id}`);
+      setDetail(data);
+      setReceiveForm(EMPTY_RECEIVE_FORM);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingReceive(false);
+    }
+  }
+
+  async function openInterestModal() {
+    setInterestModalOpen(true);
+    setInterestLoading(true);
+    try {
+      const data = await api.get('/loans/payments/interest');
+      setInterestPayments(data.payments);
+      setInterestTotal(data.total);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setInterestLoading(false);
+    }
+  }
+
   const totals = loans.reduce((acc, l) => ({
     lent: acc.lent + Number(l.principal_amount),
     toReceive: acc.toReceive + Number(l.total_amount),
@@ -176,6 +261,7 @@ export default function EmprestimosPage() {
         title="Empréstimos"
         action={(
           <div className="flex gap-2">
+            <Button variant="ghost" onClick={openInterestModal}>Juros recebidos</Button>
             <Button variant="ghost" onClick={() => setReceiptModalOpen(true)}>+ Recibo</Button>
             <Button onClick={() => setModalOpen(true)}>+ Novo empréstimo</Button>
           </div>
@@ -265,20 +351,97 @@ export default function EmprestimosPage() {
         </form>
       </Modal>
 
+      <Modal open={editModalOpen} onClose={() => setEditModalOpen(false)} title="Editar empréstimo">
+        <form onSubmit={handleEditSubmit} className="grid grid-cols-1 gap-4">
+          <Field label="Nome da pessoa"><Input required value={editForm.personName} onChange={(e) => setEditForm({ ...editForm, personName: e.target.value })} /></Field>
+          <Field label="CPF/CNPJ (opcional)"><Input value={editForm.document} onChange={(e) => setEditForm({ ...editForm, document: e.target.value })} /></Field>
+          <Field label="Telefone"><Input value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} /></Field>
+          <Field label="Vencimento"><Input type="date" value={editForm.dueDate} onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })} /></Field>
+          <Field label="Observações"><TextArea rows={2} value={editForm.notes} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} /></Field>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="ghost" onClick={() => setEditModalOpen(false)}>Cancelar</Button>
+            <Button type="submit" disabled={savingEdit}>{savingEdit ? 'Salvando...' : 'Salvar alterações'}</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={interestModalOpen} onClose={() => setInterestModalOpen(false)} title="Juros recebidos" wide>
+        <div className="space-y-4 text-sm">
+          <div className="rounded-md bg-parchment-soft p-3 text-center dark:bg-ink">
+            <p className="text-xs text-mist">Total de juros recebidos</p>
+            <p className="figures text-lg">{money(interestTotal)}</p>
+          </div>
+          {interestLoading ? (
+            <p className="text-mist">Carregando...</p>
+          ) : (
+            <Table
+              columns={[
+                { key: 'person_name', label: 'Pessoa' },
+                { key: 'payment_date', label: 'Recebido em', render: (r) => dateTime(r.payment_date) },
+                { key: 'interest_portion', label: 'Juros', align: 'right', render: (r) => money(r.interest_portion) },
+                { key: 'principal_portion', label: 'Principal', align: 'right', render: (r) => money(r.principal_portion) },
+                { key: 'payment_method', label: 'Forma', render: (r) => paymentMethodLabel(r.payment_method) },
+              ]}
+              rows={interestPayments}
+              emptyLabel="Nenhum juro recebido ainda."
+            />
+          )}
+        </div>
+      </Modal>
+
       <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title={detail ? detail.loan.person_name : ''} wide>
         {detail && (
           <div className="space-y-4 text-sm">
             <div className="flex items-center justify-between">
               <Badge status={detail.loan.status} />
-              {detail.loan.status !== 'cancelado' && (
-                <Button variant="danger" onClick={() => handleCancel(detail.loan.id)}>Cancelar empréstimo</Button>
-              )}
+              <div className="flex gap-2">
+                {detail.loan.status !== 'cancelado' && (
+                  <Button variant="ghost" onClick={openEdit}>Editar</Button>
+                )}
+                {detail.loan.status !== 'cancelado' && (
+                  <Button variant="danger" onClick={() => handleCancel(detail.loan.id)}>Cancelar empréstimo</Button>
+                )}
+              </div>
             </div>
             <div className="grid grid-cols-1 gap-3 text-center sm:grid-cols-3">
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Principal</p><p className="figures">{money(detail.loan.principal_amount)}</p></div>
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Juros ({detail.loan.interest_percentage}%)</p><p className="figures">{money(detail.loan.total_amount - detail.loan.principal_amount)}</p></div>
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Total a receber</p><p className="figures">{money(detail.loan.total_amount)}</p></div>
             </div>
+
+            {detail.loan.status !== 'cancelado' && detail.loan.status !== 'pago' && (
+              <div className="rounded-md border border-gold/30 p-4">
+                <p className="mb-3 font-display text-base italic text-ink dark:text-parchment">Registrar recebimento</p>
+                <p className="mb-3 text-xs text-mist">
+                  Informe quanto foi de juros e, se o cliente pagou a mais, quanto vai para abater o capital emprestado.
+                </p>
+                <form onSubmit={handleReceiveSubmit} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <Field label="Juros recebido (R$)">
+                    <Input type="number" step="0.01" min="0" value={receiveForm.interestAmount}
+                      onChange={(e) => setReceiveForm({ ...receiveForm, interestAmount: e.target.value })} />
+                  </Field>
+                  <Field label="Abatimento do capital (R$)">
+                    <Input type="number" step="0.01" min="0" value={receiveForm.principalAmount}
+                      onChange={(e) => setReceiveForm({ ...receiveForm, principalAmount: e.target.value })} />
+                  </Field>
+                  <Field label="Forma de pagamento">
+                    <Select value={receiveForm.paymentMethod} onChange={(e) => setReceiveForm({ ...receiveForm, paymentMethod: e.target.value })}>
+                      <option value="dinheiro">Dinheiro</option>
+                      <option value="pix">PIX</option>
+                      <option value="debito">Débito</option>
+                      <option value="credito">Crédito</option>
+                      <option value="transferencia">Transferência</option>
+                      <option value="outros">Outros</option>
+                    </Select>
+                  </Field>
+                  <Field label="Observações"><Input value={receiveForm.notes} onChange={(e) => setReceiveForm({ ...receiveForm, notes: e.target.value })} /></Field>
+                  <div className="sm:col-span-2 flex justify-end">
+                    <Button type="submit" disabled={savingReceive}>{savingReceive ? 'Registrando...' : 'Registrar recebimento'}</Button>
+                  </div>
+                </form>
+              </div>
+            )}
+
             <Tabs tabs={[
               { key: 'parcelas', label: 'Parcelas' },
               { key: 'recebido', label: `Recebido (${detail.payments.length})` },

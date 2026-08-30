@@ -124,6 +124,28 @@ async function createLoan(req, res, next) {
   }
 }
 
+async function updateLoan(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    const { personName, document, phone, dueDate, notes } = req.body;
+
+    const { rows: existing } = await query('SELECT * FROM loans WHERE id = $1 AND deleted_at IS NULL', [id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Empréstimo não encontrado.' });
+    if (!personName || !personName.trim()) return res.status(400).json({ error: 'Nome da pessoa é obrigatório.' });
+
+    const { rows } = await query(
+      `UPDATE loans SET person_name = $1, document = $2, phone = $3, due_date = $4, notes = $5
+       WHERE id = $6 RETURNING *`,
+      [personName.trim(), document || null, phone || null, dueDate || null, notes || null, id]
+    );
+
+    await logAudit({ userId: req.user.id, action: 'update', tableName: 'loans', recordId: id, oldData: existing[0], newData: rows[0], req });
+    res.json({ loan: rows[0] });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function payLoanInstallment(req, res, next) {
   try {
     const installmentId = Number(req.params.id);
@@ -213,6 +235,128 @@ async function payLoanInstallment(req, res, next) {
   }
 }
 
+/**
+ * Recebimento flexível: o cliente paga um valor de juros e, opcionalmente,
+ * um valor a mais para abater o capital emprestado — sem precisar bater
+ * exatamente com o valor de uma parcela específica. O valor é aplicado nas
+ * parcelas pendentes (mais antiga primeiro); se sobrar valor além do total
+ * das parcelas em aberto, é registrado como abatimento avulso do empréstimo.
+ */
+async function receiveLoanPayment(req, res, next) {
+  try {
+    const loanId = Number(req.params.id);
+    const { interestAmount = 0, principalAmount = 0, paymentMethod, notes } = req.body;
+    const interest = Number(interestAmount) || 0;
+    const principal = Number(principalAmount) || 0;
+    const total = Number((interest + principal).toFixed(2));
+
+    if (total <= 0) return res.status(400).json({ error: 'Informe o valor de juros e/ou de abatimento do capital.' });
+    if (!PAYMENT_METHODS.includes(paymentMethod)) return res.status(400).json({ error: 'Forma de pagamento inválida.' });
+
+    const result = await withTransaction(async (client) => {
+      const { rows: loanRows } = await client.query(
+        'SELECT * FROM loans WHERE id = $1 AND deleted_at IS NULL FOR UPDATE', [loanId]
+      );
+      if (loanRows.length === 0) {
+        const err = new Error('Empréstimo não encontrado.');
+        err.status = 404;
+        throw err;
+      }
+      const loan = loanRows[0];
+
+      const { rows: installments } = await client.query(
+        `SELECT * FROM loan_installments WHERE loan_id = $1 AND status NOT IN ('pago','cancelado')
+         ORDER BY installment_number FOR UPDATE`,
+        [loanId]
+      );
+
+      const interestRatio = total > 0 ? interest / total : 0;
+      let remaining = total;
+      const paymentsCreated = [];
+
+      async function registerPortion(applied, installmentId, referenceType, referenceId) {
+        const appliedInterest = Number((applied * interestRatio).toFixed(2));
+        const appliedPrincipal = Number((applied - appliedInterest).toFixed(2));
+
+        const { rows: paymentRows } = await client.query(
+          `INSERT INTO loan_payments (loan_id, installment_id, amount, principal_portion, interest_portion, payment_method, notes, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+          [loanId, installmentId, applied, appliedPrincipal, appliedInterest, paymentMethod, notes || null, req.user.id]
+        );
+        paymentsCreated.push(paymentRows[0]);
+
+        if (appliedPrincipal > 0) {
+          await client.query(
+            `INSERT INTO cash_movements (direction, category, amount, description, reference_type, reference_id, created_by)
+             VALUES ('entrada','recebimento_emprestimo',$1,$2,$3,$4,$5)`,
+            [appliedPrincipal, `Recebimento empréstimo - ${loan.person_name}`, referenceType, referenceId, req.user.id]
+          );
+        }
+        if (appliedInterest > 0) {
+          await client.query(
+            `INSERT INTO cash_movements (direction, category, amount, description, reference_type, reference_id, created_by)
+             VALUES ('entrada','juros_emprestimo',$1,$2,$3,$4,$5)`,
+            [appliedInterest, `Juros recebidos - ${loan.person_name}`, referenceType, referenceId, req.user.id]
+          );
+        }
+      }
+
+      for (const inst of installments) {
+        if (remaining <= 0) break;
+        const owed = Number(inst.amount) - Number(inst.paid_amount);
+        if (owed <= 0) continue;
+        const applied = Number(Math.min(owed, remaining).toFixed(2));
+
+        const newPaid = Number(inst.paid_amount) + applied;
+        const newStatus = newPaid >= Number(inst.amount) - 0.01 ? 'pago' : 'parcial';
+        await client.query('UPDATE loan_installments SET paid_amount = $1, status = $2 WHERE id = $3', [newPaid, newStatus, inst.id]);
+
+        await registerPortion(applied, inst.id, 'loan_installment', inst.id);
+        remaining = Number((remaining - applied).toFixed(2));
+      }
+
+      if (remaining > 0.01) {
+        // Sobrou valor além do total das parcelas pendentes: registra como
+        // abatimento avulso, direto no empréstimo (ex: adiantamento de capital).
+        await registerPortion(remaining, null, 'loan', loanId);
+      }
+
+      const { rows: pendingCount } = await client.query(
+        `SELECT COUNT(*) FROM loan_installments WHERE loan_id = $1 AND status NOT IN ('pago','cancelado')`,
+        [loanId]
+      );
+      const loanStatus = Number(pendingCount[0].count) === 0 ? 'pago' : 'parcial';
+      await client.query('UPDATE loans SET status = $1 WHERE id = $2', [loanStatus, loanId]);
+
+      return paymentsCreated;
+    });
+
+    await logAudit({ userId: req.user.id, action: 'payment', tableName: 'loans', recordId: loanId, newData: { interest, principal }, req });
+    res.status(201).json({ payments: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Lista todos os pagamentos que tiveram alguma parcela de juros — usada pelo
+ * botão "Juros recebidos", que mostra o histórico e o total já embolsado.
+ */
+async function listInterestPayments(req, res, next) {
+  try {
+    const { rows } = await query(
+      `SELECT lp.*, l.person_name FROM loan_payments lp
+       JOIN loans l ON l.id = lp.loan_id
+       WHERE lp.interest_portion > 0
+       ORDER BY lp.payment_date DESC`
+    );
+    const total = rows.reduce((sum, r) => sum + Number(r.interest_portion), 0);
+    res.json({ payments: rows, total });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function cancelLoan(req, res, next) {
   try {
     const id = Number(req.params.id);
@@ -229,4 +373,7 @@ async function cancelLoan(req, res, next) {
   }
 }
 
-module.exports = { listLoans, getLoan, createLoan, payLoanInstallment, cancelLoan };
+module.exports = {
+  listLoans, getLoan, createLoan, updateLoan, payLoanInstallment,
+  receiveLoanPayment, listInterestPayments, cancelLoan,
+};
