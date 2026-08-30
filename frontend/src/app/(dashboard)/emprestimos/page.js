@@ -30,6 +30,7 @@ export default function EmprestimosPage() {
   const [detail, setDetail] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [payAmount, setPayAmount] = useState({});
+  const [downloadingReceipts, setDownloadingReceipts] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -89,6 +90,18 @@ export default function EmprestimosPage() {
     }
   }
 
+  async function handleDownloadReceipts() {
+    setDownloadingReceipts(true);
+    setError('');
+    try {
+      await api.download('/reports/pdf/emprestimos', 'recibos-emprestimos.pdf');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDownloadingReceipts(false);
+    }
+  }
+
   async function handleCancel(id) {
     if (!confirm('Cancelar este empréstimo?')) return;
     try {
@@ -120,7 +133,18 @@ export default function EmprestimosPage() {
 
   return (
     <div>
-      <PageHeader eyebrow={`${loans.length} empréstimo(s)`} title="Empréstimos" action={<Button onClick={() => setModalOpen(true)}>+ Novo empréstimo</Button>} />
+      <PageHeader
+        eyebrow={`${loans.length} empréstimo(s)`}
+        title="Empréstimos"
+        action={(
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={handleDownloadReceipts} disabled={downloadingReceipts}>
+              {downloadingReceipts ? 'Gerando...' : 'Recibos'}
+            </Button>
+            <Button onClick={() => setModalOpen(true)}>+ Novo empréstimo</Button>
+          </div>
+        )}
+      />
       <ErrorBanner message={error} />
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard label="Total emprestado" value={money(totals.lent)} />
