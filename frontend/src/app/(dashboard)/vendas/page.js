@@ -67,6 +67,7 @@ export default function VendasPage() {
   function openCreate() {
     setSaleForm(EMPTY_SALE_FORM);
     setItems([{ productId: '', quantity: 1, unitPrice: '' }]);
+    setError('');
     setModalOpen(true);
   }
 
@@ -195,6 +196,7 @@ export default function VendasPage() {
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Nova venda" wide>
         <form onSubmit={handleSubmit} className="space-y-4">
+          <ErrorBanner message={error} />
           <Field label="Cliente (opcional)">
             <Select value={saleForm.customerId} onChange={(e) => setSaleForm({ ...saleForm, customerId: e.target.value })}>
               <option value="">Venda avulsa</option>
