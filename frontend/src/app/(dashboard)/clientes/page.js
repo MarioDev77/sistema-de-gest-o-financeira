@@ -3,13 +3,14 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useApiClient } from '@/lib/useApiClient';
-import { money, shortDate } from '@/lib/format';
+import { money, shortDate, dateTime, paymentMethodLabel } from '@/lib/format';
 import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
 import Table from '@/components/ui/Table';
 import Modal from '@/components/ui/Modal';
 import ErrorBanner from '@/components/ui/ErrorBanner';
 import Field, { Input, TextArea } from '@/components/ui/Field';
+import Tabs from '@/components/ui/Tabs';
 
 const EMPTY_FORM = { name: '', document: '', phone: '', whatsapp: '', email: '', address: '', notes: '' };
 
@@ -141,10 +142,14 @@ export default function ClientesPage() {
       <Modal open={historyOpen} onClose={() => setHistoryOpen(false)} title={history ? `Histórico — ${history.customer.name}` : ''} wide>
         {history && (
           <div className="space-y-4 text-sm">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink">
                 <p className="text-xs text-mist">Total comprado</p>
                 <p className="figures text-lg">{money(history.totals.totalPurchased)}</p>
+              </div>
+              <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink">
+                <p className="text-xs text-mist">Total recebido</p>
+                <p className="figures text-lg text-sage">{money(history.totals.totalReceived)}</p>
               </div>
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink">
                 <p className="text-xs text-mist">Pendente</p>
@@ -164,19 +169,34 @@ export default function ClientesPage() {
                 emptyLabel="Nenhuma compra ainda."
               />
             </div>
-            <div>
-              <p className="mb-2 font-medium">Parcelas pendentes</p>
-              <Table
-                columns={[
-                  { key: 'sale_number', label: 'Venda' },
-                  { key: 'due_date', label: 'Vencimento', render: (r) => shortDate(r.due_date) },
-                  { key: 'amount', label: 'Valor', align: 'right', render: (r) => money(r.amount - r.paid_amount) },
-                  { key: 'status', label: 'Status' },
-                ]}
-                rows={history.pendingInstallments}
-                emptyLabel="Nenhuma pendência."
-              />
-            </div>
+            <Tabs tabs={[
+              { key: 'recebido', label: `Recebido (${history.receivedPayments.length})` },
+              { key: 'pendente', label: 'Pendente' },
+            ]}>
+              {(active) => active === 'recebido' ? (
+                <Table
+                  columns={[
+                    { key: 'payment_date', label: 'Recebido em', render: (r) => dateTime(r.payment_date) },
+                    { key: 'sale_number', label: 'Venda' },
+                    { key: 'amount', label: 'Valor', align: 'right', render: (r) => money(r.amount) },
+                    { key: 'payment_method', label: 'Forma', render: (r) => paymentMethodLabel(r.payment_method) },
+                  ]}
+                  rows={history.receivedPayments}
+                  emptyLabel="Nenhum valor recebido ainda."
+                />
+              ) : (
+                <Table
+                  columns={[
+                    { key: 'sale_number', label: 'Venda' },
+                    { key: 'due_date', label: 'Vencimento', render: (r) => shortDate(r.due_date) },
+                    { key: 'amount', label: 'Valor', align: 'right', render: (r) => money(r.amount - r.paid_amount) },
+                    { key: 'status', label: 'Status' },
+                  ]}
+                  rows={history.pendingInstallments}
+                  emptyLabel="Nenhuma pendência."
+                />
+              )}
+            </Tabs>
           </div>
         )}
       </Modal>

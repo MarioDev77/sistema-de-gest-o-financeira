@@ -47,17 +47,29 @@ async function getCustomerHistory(req, res, next) {
       [id]
     );
 
+    // Todo valor já recebido desse cliente, com data/hora e forma de pagamento.
+    const { rows: receivedPayments } = await query(
+      `SELECT p.id, p.amount, p.payment_method, p.payment_date, s.sale_number
+       FROM payments p
+       JOIN sales s ON s.id = p.sale_id
+       WHERE s.customer_id = $1 AND s.deleted_at IS NULL
+       ORDER BY p.payment_date DESC`,
+      [id]
+    );
+
     const totalPurchased = sales.reduce((sum, s) => sum + Number(s.total), 0);
     const totalPending = pendingInstallments.reduce(
       (sum, i) => sum + (Number(i.amount) - Number(i.paid_amount)),
       0
     );
+    const totalReceived = receivedPayments.reduce((sum, p) => sum + Number(p.amount), 0);
 
     res.json({
       customer: customerRows[0],
       sales,
+      receivedPayments,
       pendingInstallments,
-      totals: { totalPurchased, totalPending },
+      totals: { totalPurchased, totalPending, totalReceived },
     });
   } catch (err) {
     next(err);

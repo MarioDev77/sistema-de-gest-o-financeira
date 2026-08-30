@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useApiClient } from '@/lib/useApiClient';
-import { money, shortDate } from '@/lib/format';
+import { money, shortDate, dateTime, paymentMethodLabel } from '@/lib/format';
 import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
 import Table from '@/components/ui/Table';
@@ -11,6 +11,7 @@ import Badge from '@/components/ui/Badge';
 import ErrorBanner from '@/components/ui/ErrorBanner';
 import StatCard from '@/components/ui/StatCard';
 import Field, { Input, Select, TextArea } from '@/components/ui/Field';
+import Tabs from '@/components/ui/Tabs';
 
 const EMPTY_FORM = {
   personName: '', document: '', phone: '', principalAmount: '', interestType: 'fixo',
@@ -168,30 +169,46 @@ export default function EmprestimosPage() {
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Juros ({detail.loan.interest_percentage}%)</p><p className="figures">{money(detail.loan.total_amount - detail.loan.principal_amount)}</p></div>
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Total a receber</p><p className="figures">{money(detail.loan.total_amount)}</p></div>
             </div>
-            <div>
-              <p className="mb-2 font-medium">Parcelas</p>
-              <div className="space-y-2">
-                {detail.installments.map((inst) => (
-                  <div key={inst.id} className="flex items-center justify-between rounded-md border border-ink-line/10 p-3 dark:border-parchment/10">
-                    <div>
-                      <p>Parcela {inst.installment_number} — venc. {shortDate(inst.due_date)}</p>
-                      <p className="text-xs text-mist">{money(inst.paid_amount)} de {money(inst.amount)} pago</p>
+            <Tabs tabs={[
+              { key: 'parcelas', label: 'Parcelas' },
+              { key: 'recebido', label: `Recebido (${detail.payments.length})` },
+            ]}>
+              {(active) => active === 'parcelas' ? (
+                <div className="space-y-2">
+                  {detail.installments.map((inst) => (
+                    <div key={inst.id} className="flex items-center justify-between rounded-md border border-ink-line/10 p-3 dark:border-parchment/10">
+                      <div>
+                        <p>Parcela {inst.installment_number} — venc. {shortDate(inst.due_date)}</p>
+                        <p className="text-xs text-mist">{money(inst.paid_amount)} de {money(inst.amount)} pago</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge status={inst.status} />
+                        {!['pago', 'cancelado'].includes(inst.status) && (
+                          <>
+                            <Input type="number" step="0.01" className="w-24" placeholder="Valor"
+                              value={payAmount[inst.id] || ''}
+                              onChange={(e) => setPayAmount({ ...payAmount, [inst.id]: e.target.value })} />
+                            <Button onClick={() => handlePay(inst.id)}>Pagar</Button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Badge status={inst.status} />
-                      {!['pago', 'cancelado'].includes(inst.status) && (
-                        <>
-                          <Input type="number" step="0.01" className="w-24" placeholder="Valor"
-                            value={payAmount[inst.id] || ''}
-                            onChange={(e) => setPayAmount({ ...payAmount, [inst.id]: e.target.value })} />
-                          <Button onClick={() => handlePay(inst.id)}>Pagar</Button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+                  ))}
+                </div>
+              ) : (
+                <Table
+                  columns={[
+                    { key: 'payment_date', label: 'Recebido em', render: (r) => dateTime(r.payment_date) },
+                    { key: 'amount', label: 'Valor', align: 'right', render: (r) => money(r.amount) },
+                    { key: 'principal_portion', label: 'Principal', align: 'right', render: (r) => money(r.principal_portion) },
+                    { key: 'interest_portion', label: 'Juros', align: 'right', render: (r) => money(r.interest_portion) },
+                    { key: 'payment_method', label: 'Forma', render: (r) => paymentMethodLabel(r.payment_method) },
+                  ]}
+                  rows={detail.payments}
+                  emptyLabel="Nenhum valor recebido ainda."
+                />
+              )}
+            </Tabs>
           </div>
         )}
       </Modal>
