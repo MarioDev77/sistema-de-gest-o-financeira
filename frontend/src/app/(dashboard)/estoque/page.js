@@ -21,7 +21,7 @@ const REASONS = [
 
 const EMPTY_PRODUCT_FORM = {
   name: '', sku: '', categoryId: '', brand: '', cost: '', price: '',
-  minStock: '', description: '', status: 'ativo',
+  quantity: '', minStock: '', description: '', status: 'ativo',
 };
 
 export default function EstoquePage() {
@@ -44,6 +44,7 @@ export default function EstoquePage() {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(EMPTY_PRODUCT_FORM);
+  const [originalQuantity, setOriginalQuantity] = useState(0);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
 
@@ -86,10 +87,12 @@ export default function EstoquePage() {
   function openEditProduct(product) {
     setEditingId(product.id);
     setEditError('');
+    setOriginalQuantity(Number(product.quantity) || 0);
     setEditForm({
       name: product.name, sku: product.sku || '', categoryId: product.category_id || '',
       brand: product.brand || '', cost: product.cost, price: product.price,
-      minStock: product.min_stock, description: product.description || '', status: product.status,
+      quantity: product.quantity, minStock: product.min_stock,
+      description: product.description || '', status: product.status,
     });
     setEditModalOpen(true);
   }
@@ -106,7 +109,24 @@ export default function EstoquePage() {
         price: Number(editForm.price),
         minStock: Number(editForm.minStock) || 0,
       };
+      delete payload.quantity; // quantidade não é salva pelo endpoint de produto — vira movimentação abaixo
       await api.put(`/products/${editingId}`, payload);
+
+      // A quantidade não é um campo do produto em si: qualquer alteração vira uma
+      // movimentação de "ajuste" no estoque, pra manter o histórico auditável mesmo
+      // quando a correção é feita por aqui, na tela de edição.
+      const newQuantity = Number(editForm.quantity) || 0;
+      const delta = newQuantity - originalQuantity;
+      if (delta !== 0) {
+        await api.post('/stock-movements', {
+          productId: editingId,
+          direction: delta > 0 ? 'entrada' : 'saida',
+          reason: 'ajuste',
+          quantity: Math.abs(delta),
+          notes: 'Ajuste de quantidade via edição de produto (Estoque).',
+        });
+      }
+
       setEditModalOpen(false);
       await loadAll();
     } catch (err) {
@@ -167,8 +187,9 @@ export default function EstoquePage() {
       <div className="mt-10">
         <h2 className="mb-3 font-display text-lg text-ink dark:text-parchment">Produtos em estoque</h2>
         <p className="mb-4 text-sm text-mist">
-          Edite os dados do produto (nome, categoria, custo, preço, estoque mínimo, status e descrição) direto por aqui.
-          A quantidade em estoque continua sendo alterada apenas por movimentação, para manter o histórico auditável.
+          Edite os dados do produto (nome, categoria, custo, preço, quantidade, estoque mínimo, status e descrição)
+          direto por aqui. Alterar a quantidade aqui gera automaticamente um ajuste de estoque, mantendo o histórico
+          auditável na lista de movimentações acima.
         </p>
         {loading ? <p className="text-mist">Carregando...</p> : <Table columns={productColumns} rows={products} />}
       </div>
@@ -224,6 +245,9 @@ export default function EstoquePage() {
           <Field label="Marca"><Input value={editForm.brand} onChange={(e) => setEditForm({ ...editForm, brand: e.target.value })} /></Field>
           <Field label="Custo (R$)"><Input type="number" step="0.01" required value={editForm.cost} onChange={(e) => setEditForm({ ...editForm, cost: e.target.value })} /></Field>
           <Field label="Preço de venda (R$)"><Input type="number" step="0.01" required value={editForm.price} onChange={(e) => setEditForm({ ...editForm, price: e.target.value })} /></Field>
+          <Field label="Quantidade em estoque">
+            <Input type="number" min="0" value={editForm.quantity} onChange={(e) => setEditForm({ ...editForm, quantity: e.target.value })} />
+          </Field>
           <Field label="Estoque mínimo"><Input type="number" value={editForm.minStock} onChange={(e) => setEditForm({ ...editForm, minStock: e.target.value })} /></Field>
           <Field label="Status">
             <Select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}>
