@@ -4,7 +4,17 @@ function formatBRL(value) {
   return Number(value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
+// Datas de calendário (DATE, sem horário) não podem passar por conversão de
+// fuso horário — ler os dígitos direto da string evita o "um dia atrás" que
+// `new Date(date).toLocaleDateString()` causa quando o servidor roda fora de UTC.
 function formatDate(date) {
+  if (!date) return '—';
+  const str = typeof date === 'string' ? date : date.toISOString();
+  const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    const [, year, month, day] = match;
+    return `${day}/${month}/${year}`;
+  }
   return new Date(date).toLocaleDateString('pt-BR');
 }
 

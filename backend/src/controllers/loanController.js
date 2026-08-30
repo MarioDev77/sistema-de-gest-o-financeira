@@ -149,7 +149,7 @@ async function createLoan(req, res, next) {
           const amount = isLast ? Number((totalAmount - allocated).toFixed(2)) : perInstallment;
           allocated += amount;
           const due = new Date(baseDate);
-          due.setMonth(due.getMonth() + i);
+          due.setUTCMonth(due.getUTCMonth() + i);
           const interestAmount = Number((amount * interestRatio).toFixed(2));
           const principalPortion = Number((amount - interestAmount).toFixed(2));
 
@@ -259,7 +259,7 @@ async function updateLoan(req, res, next) {
               const amount = isLast ? Number((nextTotal - allocated).toFixed(2)) : perInstallment;
               allocated += amount;
               const due = new Date(baseDate);
-              due.setMonth(due.getMonth() + i);
+              due.setUTCMonth(due.getUTCMonth() + i);
               const interestAmount = Number((amount * interestRatio).toFixed(2));
               const principalPortion = Number((amount - interestAmount).toFixed(2));
               await client.query(

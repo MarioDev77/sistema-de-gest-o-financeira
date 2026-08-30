@@ -217,7 +217,7 @@ async function createSale(req, res, next) {
           allocated += amount;
 
           const dueDate = new Date(baseDate);
-          dueDate.setMonth(dueDate.getMonth() + (i - 1));
+          dueDate.setUTCMonth(dueDate.getUTCMonth() + (i - 1));
 
           const { rows: instRows } = await client.query(
             `INSERT INTO installments (sale_id, installment_number, due_date, amount)
