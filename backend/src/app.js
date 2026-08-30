@@ -7,6 +7,12 @@ const errorHandler = require('./middlewares/errorHandler');
 
 const app = express();
 
+// Necessário no Railway (e em qualquer host atrás de proxy/load balancer):
+// sem isso, o express-rate-limit lança ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
+// ao ver o header X-Forwarded-For que o proxy adiciona.
+// '1' confia apenas no primeiro proxy à frente do app (o da Railway).
+app.set('trust proxy', 1);
+
 app.use(helmet());
 app.use(
   cors({
