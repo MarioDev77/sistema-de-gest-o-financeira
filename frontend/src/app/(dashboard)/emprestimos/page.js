@@ -11,7 +11,13 @@ import Badge from '@/components/ui/Badge';
 import ErrorBanner from '@/components/ui/ErrorBanner';
 import StatCard from '@/components/ui/StatCard';
 import Field, { Input, Select, TextArea } from '@/components/ui/Field';
+import CurrencyInput from '@/components/ui/CurrencyInput';
 import Tabs from '@/components/ui/Tabs';
+
+// 1 a cada 1 mês, até 48 meses — ou prazo indeterminado (sem parcelas fixas,
+// juros lançados mês a mês em "Registrar recebimento").
+const INSTALLMENT_OPTIONS = Array.from({ length: 48 }, (_, i) => i + 1);
+const INDETERMINADO = 'indeterminado';
 
 const EMPTY_FORM = {
   personName: '', document: '', phone: '', principalAmount: '', interestType: 'fixo',
@@ -24,6 +30,7 @@ const EMPTY_RECEIPT_FORM = {
 
 const EMPTY_EDIT_FORM = {
   personName: '', document: '', phone: '', dueDate: '', notes: '',
+  principalAmount: '', interestType: 'fixo', interestPercentage: '', loanDate: '', installmentsCount: '1',
 };
 
 const EMPTY_RECEIVE_FORM = {
@@ -60,6 +67,8 @@ export default function EmprestimosPage() {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editForm, setEditForm] = useState(EMPTY_EDIT_FORM);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [editingLoanId, setEditingLoanId] = useState(null);
+  const [editHasPayments, setEditHasPayments] = useState(false);
 
   const [receiveForm, setReceiveForm] = useState(EMPTY_RECEIVE_FORM);
   const [savingReceive, setSavingReceive] = useState(false);
@@ -110,11 +119,13 @@ export default function EmprestimosPage() {
     setSaving(true);
     setError('');
     try {
+      const isOpenEnded = form.installmentsCount === INDETERMINADO;
       await api.post('/loans', {
         ...form,
         principalAmount: Number(form.principalAmount),
         interestPercentage: Number(form.interestPercentage) || 0,
-        installmentsCount: Number(form.installmentsCount),
+        isOpenEnded,
+        installmentsCount: isOpenEnded ? null : Number(form.installmentsCount),
       });
       setModalOpen(false);
       setForm(EMPTY_FORM);
@@ -189,16 +200,41 @@ export default function EmprestimosPage() {
     }
   }
 
+  function fillEditForm(loan) {
+    setEditForm({
+      personName: loan.person_name || '',
+      document: loan.document || '',
+      phone: loan.phone || '',
+      dueDate: loan.due_date ? loan.due_date.slice(0, 10) : '',
+      notes: loan.notes || '',
+      principalAmount: loan.principal_amount || '',
+      interestType: loan.interest_type || 'fixo',
+      interestPercentage: loan.interest_percentage || '',
+      loanDate: loan.loan_date ? loan.loan_date.slice(0, 10) : '',
+      installmentsCount: loan.is_open_ended ? INDETERMINADO : String(loan.installments_count || 1),
+    });
+  }
+
   function openEdit() {
     if (!detail) return;
-    setEditForm({
-      personName: detail.loan.person_name || '',
-      document: detail.loan.document || '',
-      phone: detail.loan.phone || '',
-      dueDate: detail.loan.due_date ? detail.loan.due_date.slice(0, 10) : '',
-      notes: detail.loan.notes || '',
-    });
+    setEditingLoanId(detail.loan.id);
+    setEditHasPayments((detail.payments || []).length > 0);
+    fillEditForm(detail.loan);
     setEditModalOpen(true);
+  }
+
+  // Botão "Editar" direto na linha da tabela principal — não precisa abrir o
+  // detalhe do empréstimo antes para editar nome, valores, juros, parcelas etc.
+  async function openEditFromRow(loan) {
+    try {
+      const data = await api.get(`/loans/${loan.id}`);
+      setEditingLoanId(loan.id);
+      setEditHasPayments((data.payments || []).length > 0);
+      fillEditForm(data.loan);
+      setEditModalOpen(true);
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
   async function handleEditSubmit(e) {
@@ -206,9 +242,22 @@ export default function EmprestimosPage() {
     setSavingEdit(true);
     setError('');
     try {
-      await api.put(`/loans/${detail.loan.id}`, editForm);
-      const data = await api.get(`/loans/${detail.loan.id}`);
-      setDetail(data);
+      const isOpenEnded = editForm.installmentsCount === INDETERMINADO;
+      const payload = {
+        ...editForm,
+        principalAmount: Number(editForm.principalAmount),
+        interestPercentage: Number(editForm.interestPercentage) || 0,
+        isOpenEnded,
+        installmentsCount: isOpenEnded ? null : Number(editForm.installmentsCount),
+      };
+      const result = await api.put(`/loans/${editingLoanId}`, payload);
+      if (result.scheduleRebuilt === false) {
+        setError('Nome/observações atualizados. Valor, juros e parcelas não foram alterados porque este empréstimo já tem recebimentos registrados.');
+      }
+      if (detail && detail.loan.id === editingLoanId) {
+        const data = await api.get(`/loans/${editingLoanId}`);
+        setDetail(data);
+      }
       setEditModalOpen(false);
       await load();
     } catch (err) {
@@ -342,8 +391,11 @@ export default function EmprestimosPage() {
     { key: 'total_amount', label: 'Total', align: 'right', render: (r) => money(r.total_amount) },
     { key: 'received', label: 'Recebido', align: 'right', render: (r) => money(r.received) },
     { key: 'remaining', label: 'Restante', align: 'right', render: (r) => money(r.remaining) },
-    { key: 'due_date', label: 'Vencimento', render: (r) => shortDate(r.due_date) },
+    { key: 'due_date', label: 'Vencimento', render: (r) => r.is_open_ended ? 'Indeterminado' : shortDate(r.due_date) },
     { key: 'status', label: 'Status', render: (r) => <Badge status={r.status} /> },
+    { key: 'actions', label: '', render: (r) => (
+      <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => openEditFromRow(r)}>Editar</Button>
+    ) },
   ];
 
   return (
@@ -402,7 +454,9 @@ export default function EmprestimosPage() {
           <Field label="Nome da pessoa"><Input required value={form.personName} onChange={(e) => setForm({ ...form, personName: e.target.value })} /></Field>
           <Field label="CPF/CNPJ (opcional)"><Input value={form.document} onChange={(e) => setForm({ ...form, document: e.target.value })} /></Field>
           <Field label="Telefone"><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
-          <Field label="Valor emprestado (R$)"><Input type="number" step="0.01" required value={form.principalAmount} onChange={(e) => setForm({ ...form, principalAmount: e.target.value })} /></Field>
+          <Field label="Valor emprestado (R$)">
+            <CurrencyInput required value={form.principalAmount} onValueChange={(v) => setForm({ ...form, principalAmount: v })} />
+          </Field>
           <Field label="Tipo de juros">
             <Select value={form.interestType} onChange={(e) => setForm({ ...form, interestType: e.target.value })}>
               <option value="fixo">Fixo (uma vez)</option>
@@ -412,7 +466,14 @@ export default function EmprestimosPage() {
           </Field>
           <Field label="Juros (%)"><Input type="number" step="0.01" value={form.interestPercentage} onChange={(e) => setForm({ ...form, interestPercentage: e.target.value })} /></Field>
           <Field label="Data do empréstimo"><Input type="date" required value={form.loanDate} onChange={(e) => setForm({ ...form, loanDate: e.target.value })} /></Field>
-          <Field label="Número de parcelas"><Input type="number" min="1" required value={form.installmentsCount} onChange={(e) => setForm({ ...form, installmentsCount: e.target.value })} /></Field>
+          <Field label="Número de parcelas (1 a cada mês)">
+            <Select value={form.installmentsCount} onChange={(e) => setForm({ ...form, installmentsCount: e.target.value })}>
+              {INSTALLMENT_OPTIONS.map((n) => (
+                <option key={n} value={n}>{n} {n === 1 ? 'mês' : 'meses'}</option>
+              ))}
+              <option value={INDETERMINADO}>Prazo indeterminado (sem parcelas fixas)</option>
+            </Select>
+          </Field>
           <div className="sm:col-span-2">
             <Field label="Observações"><TextArea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           </div>
@@ -426,7 +487,9 @@ export default function EmprestimosPage() {
       <Modal open={receiptModalOpen} onClose={() => setReceiptModalOpen(false)} title="Novo recibo">
         <form onSubmit={handleReceiptSubmit} className="grid grid-cols-1 gap-4">
           <Field label="Nome da pessoa"><Input required value={receiptForm.personName} onChange={(e) => setReceiptForm({ ...receiptForm, personName: e.target.value })} /></Field>
-          <Field label="Valor recebido (R$)"><Input type="number" step="0.01" required value={receiptForm.amount} onChange={(e) => setReceiptForm({ ...receiptForm, amount: e.target.value })} /></Field>
+          <Field label="Valor recebido (R$)">
+            <CurrencyInput required value={receiptForm.amount} onValueChange={(v) => setReceiptForm({ ...receiptForm, amount: v })} />
+          </Field>
           <Field label="Data do recebimento"><Input type="date" required value={receiptForm.receiptDate} onChange={(e) => setReceiptForm({ ...receiptForm, receiptDate: e.target.value })} /></Field>
           <Field label="Forma de pagamento">
             <Select value={receiptForm.paymentMethod} onChange={(e) => setReceiptForm({ ...receiptForm, paymentMethod: e.target.value })}>
@@ -446,14 +509,57 @@ export default function EmprestimosPage() {
         </form>
       </Modal>
 
-      <Modal open={editModalOpen} onClose={() => setEditModalOpen(false)} title="Editar empréstimo">
-        <form onSubmit={handleEditSubmit} className="grid grid-cols-1 gap-4">
+      <Modal open={editModalOpen} onClose={() => setEditModalOpen(false)} title="Editar empréstimo" wide>
+        <form onSubmit={handleEditSubmit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {editHasPayments && (
+            <p className="sm:col-span-2 rounded-md bg-parchment-soft p-3 text-xs text-mist dark:bg-ink">
+              Este empréstimo já tem recebimentos registrados, então valor, juros e número de
+              parcelas não podem ser alterados aqui (só nome, contato, vencimento e observações).
+            </p>
+          )}
           <Field label="Nome da pessoa"><Input required value={editForm.personName} onChange={(e) => setEditForm({ ...editForm, personName: e.target.value })} /></Field>
           <Field label="CPF/CNPJ (opcional)"><Input value={editForm.document} onChange={(e) => setEditForm({ ...editForm, document: e.target.value })} /></Field>
           <Field label="Telefone"><Input value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} /></Field>
-          <Field label="Vencimento"><Input type="date" value={editForm.dueDate} onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })} /></Field>
-          <Field label="Observações"><TextArea rows={2} value={editForm.notes} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} /></Field>
-          <div className="flex justify-end gap-2 pt-2">
+          <Field label="Valor emprestado (R$)">
+            <CurrencyInput required disabled={editHasPayments} value={editForm.principalAmount}
+              onValueChange={(v) => setEditForm({ ...editForm, principalAmount: v })} />
+          </Field>
+          <Field label="Tipo de juros">
+            <Select disabled={editHasPayments} value={editForm.interestType} onChange={(e) => setEditForm({ ...editForm, interestType: e.target.value })}>
+              <option value="fixo">Fixo (uma vez)</option>
+              <option value="simples">Simples (por parcela)</option>
+              <option value="por_parcela">Cobrado por parcela</option>
+            </Select>
+          </Field>
+          <Field label="Juros (%)">
+            <Input type="number" step="0.01" disabled={editHasPayments} value={editForm.interestPercentage}
+              onChange={(e) => setEditForm({ ...editForm, interestPercentage: e.target.value })} />
+          </Field>
+          <Field label="Data do empréstimo">
+            <Input type="date" disabled={editHasPayments} value={editForm.loanDate}
+              onChange={(e) => setEditForm({ ...editForm, loanDate: e.target.value })} />
+          </Field>
+          <Field label="Número de parcelas (1 a cada mês)">
+            <Select disabled={editHasPayments} value={editForm.installmentsCount}
+              onChange={(e) => setEditForm({ ...editForm, installmentsCount: e.target.value })}>
+              {INSTALLMENT_OPTIONS.map((n) => (
+                <option key={n} value={n}>{n} {n === 1 ? 'mês' : 'meses'}</option>
+              ))}
+              <option value={INDETERMINADO}>Prazo indeterminado (sem parcelas fixas)</option>
+            </Select>
+          </Field>
+          {editForm.installmentsCount === INDETERMINADO && (
+            <div className="sm:col-span-2" />
+          )}
+          {editForm.installmentsCount !== INDETERMINADO && (
+            <Field label="Vencimento (próxima parcela / geral)">
+              <Input type="date" value={editForm.dueDate} onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })} />
+            </Field>
+          )}
+          <div className="sm:col-span-2">
+            <Field label="Observações"><TextArea rows={2} value={editForm.notes} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} /></Field>
+          </div>
+          <div className="sm:col-span-2 flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" onClick={() => setEditModalOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={savingEdit}>{savingEdit ? 'Salvando...' : 'Salvar alterações'}</Button>
           </div>
@@ -463,7 +569,9 @@ export default function EmprestimosPage() {
       <Modal open={receiptEditModalOpen} onClose={() => setReceiptEditModalOpen(false)} title="Editar recibo">
         <form onSubmit={handleReceiptEditSubmit} className="grid grid-cols-1 gap-4">
           <Field label="Nome da pessoa"><Input required value={receiptEditForm.personName} onChange={(e) => setReceiptEditForm({ ...receiptEditForm, personName: e.target.value })} /></Field>
-          <Field label="Valor recebido (R$)"><Input type="number" step="0.01" required value={receiptEditForm.amount} onChange={(e) => setReceiptEditForm({ ...receiptEditForm, amount: e.target.value })} /></Field>
+          <Field label="Valor recebido (R$)">
+            <CurrencyInput required value={receiptEditForm.amount} onValueChange={(v) => setReceiptEditForm({ ...receiptEditForm, amount: v })} />
+          </Field>
           <Field label="Data do recebimento"><Input type="date" required value={receiptEditForm.receiptDate} onChange={(e) => setReceiptEditForm({ ...receiptEditForm, receiptDate: e.target.value })} /></Field>
           <Field label="Forma de pagamento">
             <Select value={receiptEditForm.paymentMethod} onChange={(e) => setReceiptEditForm({ ...receiptEditForm, paymentMethod: e.target.value })}>
@@ -489,12 +597,12 @@ export default function EmprestimosPage() {
             O caixa (Fluxo de Caixa) é ajustado automaticamente pela diferença entre o valor antigo e o novo.
           </p>
           <Field label="Juros recebido (R$)">
-            <Input type="number" step="0.01" min="0" value={paymentEditForm.interestAmount}
-              onChange={(e) => setPaymentEditForm({ ...paymentEditForm, interestAmount: e.target.value })} />
+            <CurrencyInput value={paymentEditForm.interestAmount}
+              onValueChange={(v) => setPaymentEditForm({ ...paymentEditForm, interestAmount: v })} />
           </Field>
           <Field label="Abatimento do capital (R$)">
-            <Input type="number" step="0.01" min="0" value={paymentEditForm.principalAmount}
-              onChange={(e) => setPaymentEditForm({ ...paymentEditForm, principalAmount: e.target.value })} />
+            <CurrencyInput value={paymentEditForm.principalAmount}
+              onValueChange={(v) => setPaymentEditForm({ ...paymentEditForm, principalAmount: v })} />
           </Field>
           <Field label="Data do recebimento"><Input type="date" value={paymentEditForm.paymentDate} onChange={(e) => setPaymentEditForm({ ...paymentEditForm, paymentDate: e.target.value })} /></Field>
           <Field label="Forma de pagamento">
@@ -570,12 +678,12 @@ export default function EmprestimosPage() {
                 </p>
                 <form onSubmit={handleReceiveSubmit} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Field label="Juros recebido (R$)">
-                    <Input type="number" step="0.01" min="0" value={receiveForm.interestAmount}
-                      onChange={(e) => setReceiveForm({ ...receiveForm, interestAmount: e.target.value })} />
+                    <CurrencyInput value={receiveForm.interestAmount}
+                      onValueChange={(v) => setReceiveForm({ ...receiveForm, interestAmount: v })} />
                   </Field>
                   <Field label="Abatimento do capital (R$)">
-                    <Input type="number" step="0.01" min="0" value={receiveForm.principalAmount}
-                      onChange={(e) => setReceiveForm({ ...receiveForm, principalAmount: e.target.value })} />
+                    <CurrencyInput value={receiveForm.principalAmount}
+                      onValueChange={(v) => setReceiveForm({ ...receiveForm, principalAmount: v })} />
                   </Field>
                   <Field label="Forma de pagamento">
                     <Select value={receiveForm.paymentMethod} onChange={(e) => setReceiveForm({ ...receiveForm, paymentMethod: e.target.value })}>
@@ -601,6 +709,12 @@ export default function EmprestimosPage() {
             ]}>
               {(active) => active === 'parcelas' ? (
                 <div className="space-y-2">
+                  {detail.loan.is_open_ended && detail.installments.length === 0 && (
+                    <p className="rounded-md border border-dashed border-ink-line/20 p-4 text-center text-xs text-mist dark:border-parchment/20">
+                      Empréstimo de prazo indeterminado — sem parcelas fixas. Use
+                      &quot;Registrar recebimento&quot; acima para lançar juros e abatimentos mês a mês.
+                    </p>
+                  )}
                   {detail.installments.map((inst) => (
                     <div key={inst.id} className="flex flex-col gap-2 rounded-md border border-ink-line/10 p-3 sm:flex-row sm:items-center sm:justify-between dark:border-parchment/10">
                       <div>
@@ -611,9 +725,9 @@ export default function EmprestimosPage() {
                         <Badge status={inst.status} />
                         {!['pago', 'cancelado'].includes(inst.status) && (
                           <>
-                            <Input type="number" step="0.01" className="w-24" placeholder="Valor"
+                            <CurrencyInput className="w-32" placeholder="Valor"
                               value={payAmount[inst.id] || ''}
-                              onChange={(e) => setPayAmount({ ...payAmount, [inst.id]: e.target.value })} />
+                              onValueChange={(v) => setPayAmount({ ...payAmount, [inst.id]: v })} />
                             <Button onClick={() => handlePay(inst.id)}>Pagar</Button>
                           </>
                         )}

@@ -62,49 +62,58 @@ async function createLoan(req, res, next) {
   try {
     const {
       personName, document, phone, principalAmount, interestType, interestPercentage = 0,
-      loanDate, dueDate, installmentsCount = 1, paymentMethod, notes,
+      loanDate, dueDate, installmentsCount = 1, isOpenEnded = false, paymentMethod, notes,
     } = req.body;
 
     if (!personName || !personName.trim()) return res.status(400).json({ error: 'Nome da pessoa é obrigatório.' });
     if (!principalAmount || Number(principalAmount) <= 0) return res.status(400).json({ error: 'Valor emprestado inválido.' });
     if (!INTEREST_TYPES.includes(interestType)) return res.status(400).json({ error: 'Tipo de juros inválido.' });
     if (!loanDate) return res.status(400).json({ error: 'Data do empréstimo é obrigatória.' });
-    if (!installmentsCount || installmentsCount < 1) return res.status(400).json({ error: 'Número de parcelas inválido.' });
+    if (!isOpenEnded && (!installmentsCount || installmentsCount < 1 || installmentsCount > 48)) {
+      return res.status(400).json({ error: 'Número de parcelas deve ser entre 1 e 48 meses (ou marque prazo indeterminado).' });
+    }
 
     const totalAmount = calculateLoanTotal({
-      principal: principalAmount, interestType, interestPercentage, installmentsCount,
+      principal: principalAmount, interestType, interestPercentage,
+      installmentsCount: isOpenEnded ? null : installmentsCount, isOpenEnded,
     });
 
     const result = await withTransaction(async (client) => {
       const { rows: loanRows } = await client.query(
         `INSERT INTO loans
           (person_name, document, phone, principal_amount, interest_type, interest_percentage,
-           total_amount, loan_date, due_date, installments_count, payment_method, notes, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+           total_amount, loan_date, due_date, installments_count, is_open_ended, payment_method, notes, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
         [personName.trim(), document || null, phone || null, principalAmount, interestType,
-         interestPercentage, totalAmount, loanDate, dueDate || null, installmentsCount,
-         paymentMethod || null, notes || null, req.user.id]
+         interestPercentage, totalAmount, loanDate, isOpenEnded ? null : (dueDate || null),
+         isOpenEnded ? null : installmentsCount, isOpenEnded, paymentMethod || null, notes || null, req.user.id]
       );
       const loan = loanRows[0];
 
-      const perInstallment = Math.floor((totalAmount / installmentsCount) * 100) / 100;
-      const baseDate = new Date(loanDate);
-      let allocated = 0;
       const installments = [];
 
-      for (let i = 1; i <= installmentsCount; i += 1) {
-        const isLast = i === installmentsCount;
-        const amount = isLast ? Number((totalAmount - allocated).toFixed(2)) : perInstallment;
-        allocated += amount;
-        const due = new Date(baseDate);
-        due.setMonth(due.getMonth() + i);
+      // Prazo indeterminado: não gera parcelas fixas. Os recebimentos (juros
+      // e abatimento do capital) são lançados livremente via /loans/:id/receive,
+      // mês a mês, sem uma data de vencimento pré-definida.
+      if (!isOpenEnded) {
+        const perInstallment = Math.floor((totalAmount / installmentsCount) * 100) / 100;
+        const baseDate = new Date(loanDate);
+        let allocated = 0;
 
-        const { rows: instRows } = await client.query(
-          `INSERT INTO loan_installments (loan_id, installment_number, due_date, amount)
-           VALUES ($1,$2,$3,$4) RETURNING *`,
-          [loan.id, i, due.toISOString().slice(0, 10), amount]
-        );
-        installments.push(instRows[0]);
+        for (let i = 1; i <= installmentsCount; i += 1) {
+          const isLast = i === installmentsCount;
+          const amount = isLast ? Number((totalAmount - allocated).toFixed(2)) : perInstallment;
+          allocated += amount;
+          const due = new Date(baseDate);
+          due.setMonth(due.getMonth() + i);
+
+          const { rows: instRows } = await client.query(
+            `INSERT INTO loan_installments (loan_id, installment_number, due_date, amount)
+             VALUES ($1,$2,$3,$4) RETURNING *`,
+            [loan.id, i, due.toISOString().slice(0, 10), amount]
+          );
+          installments.push(instRows[0]);
+        }
       }
 
       // Dinheiro emprestado sai do caixa no momento da concessão.
@@ -124,14 +133,102 @@ async function createLoan(req, res, next) {
   }
 }
 
+/**
+ * Edita um empréstimo — inclusive os valores de dinheiro (principal, juros)
+ * e o número de parcelas, direto pelo botão "Editar" ao lado do cliente.
+ *
+ * Se ainda não houve nenhum recebimento registrado para o empréstimo, o
+ * cronograma de parcelas é inteiramente recriado com os novos valores
+ * (principal/juros/parcelas/data podem mudar livremente). Se já existe algum
+ * recebimento, as parcelas não são recriadas (evitaria descasar valores já
+ * pagos) — o principal/juros/data ainda podem ser corrigidos, mas quem
+ * decide se quer cancelar e recriar o empréstimo é o usuário. A resposta
+ * inclui `scheduleRebuilt` para o front avisar quando isso não foi possível.
+ */
 async function updateLoan(req, res, next) {
   try {
     const id = Number(req.params.id);
-    const { personName, document, phone, dueDate, notes } = req.body;
+    const {
+      personName, document, phone, dueDate, notes,
+      principalAmount, interestType, interestPercentage, loanDate,
+      installmentsCount, isOpenEnded,
+    } = req.body;
 
     const { rows: existing } = await query('SELECT * FROM loans WHERE id = $1 AND deleted_at IS NULL', [id]);
     if (existing.length === 0) return res.status(404).json({ error: 'Empréstimo não encontrado.' });
     if (!personName || !personName.trim()) return res.status(400).json({ error: 'Nome da pessoa é obrigatório.' });
+    const loan = existing[0];
+
+    const wantsScheduleChange = [
+      principalAmount, interestType, interestPercentage, loanDate, installmentsCount, isOpenEnded,
+    ].some((v) => v !== undefined);
+
+    if (wantsScheduleChange) {
+      const nextInterestType = interestType || loan.interest_type;
+      if (!INTEREST_TYPES.includes(nextInterestType)) return res.status(400).json({ error: 'Tipo de juros inválido.' });
+      const nextPrincipal = principalAmount !== undefined ? Number(principalAmount) : Number(loan.principal_amount);
+      if (!nextPrincipal || nextPrincipal <= 0) return res.status(400).json({ error: 'Valor emprestado inválido.' });
+      const nextOpenEnded = isOpenEnded !== undefined ? !!isOpenEnded : loan.is_open_ended;
+      const nextInstallmentsCount = installmentsCount !== undefined ? Number(installmentsCount) : loan.installments_count;
+      if (!nextOpenEnded && (!nextInstallmentsCount || nextInstallmentsCount < 1 || nextInstallmentsCount > 48)) {
+        return res.status(400).json({ error: 'Número de parcelas deve ser entre 1 e 48 meses (ou marque prazo indeterminado).' });
+      }
+      const nextInterestPercentage = interestPercentage !== undefined ? Number(interestPercentage) : Number(loan.interest_percentage);
+      const nextLoanDate = loanDate || loan.loan_date;
+
+      const result = await withTransaction(async (client) => {
+        const { rows: paymentCountRows } = await client.query(
+          'SELECT COUNT(*) FROM loan_payments WHERE loan_id = $1', [id]
+        );
+        const hasPayments = Number(paymentCountRows[0].count) > 0;
+
+        const nextTotal = calculateLoanTotal({
+          principal: nextPrincipal, interestType: nextInterestType, interestPercentage: nextInterestPercentage,
+          installmentsCount: nextOpenEnded ? null : nextInstallmentsCount, isOpenEnded: nextOpenEnded,
+        });
+
+        const { rows: updatedRows } = await client.query(
+          `UPDATE loans SET person_name = $1, document = $2, phone = $3, due_date = $4, notes = $5,
+             principal_amount = $6, interest_type = $7, interest_percentage = $8, total_amount = $9,
+             loan_date = $10, installments_count = $11, is_open_ended = $12
+           WHERE id = $13 RETURNING *`,
+          [personName.trim(), document || null, phone || null,
+           nextOpenEnded ? null : (dueDate !== undefined ? (dueDate || null) : loan.due_date),
+           notes !== undefined ? (notes || null) : loan.notes,
+           nextPrincipal, nextInterestType, nextInterestPercentage, nextTotal, nextLoanDate,
+           nextOpenEnded ? null : nextInstallmentsCount, nextOpenEnded, id]
+        );
+        const updatedLoan = updatedRows[0];
+
+        let scheduleRebuilt = false;
+        if (!hasPayments) {
+          await client.query('DELETE FROM loan_installments WHERE loan_id = $1', [id]);
+          if (!nextOpenEnded) {
+            const perInstallment = Math.floor((nextTotal / nextInstallmentsCount) * 100) / 100;
+            const baseDate = new Date(nextLoanDate);
+            let allocated = 0;
+            for (let i = 1; i <= nextInstallmentsCount; i += 1) {
+              const isLast = i === nextInstallmentsCount;
+              const amount = isLast ? Number((nextTotal - allocated).toFixed(2)) : perInstallment;
+              allocated += amount;
+              const due = new Date(baseDate);
+              due.setMonth(due.getMonth() + i);
+              await client.query(
+                `INSERT INTO loan_installments (loan_id, installment_number, due_date, amount)
+                 VALUES ($1,$2,$3,$4)`,
+                [id, i, due.toISOString().slice(0, 10), amount]
+              );
+            }
+          }
+          scheduleRebuilt = true;
+        }
+
+        return { updatedLoan, scheduleRebuilt };
+      });
+
+      await logAudit({ userId: req.user.id, action: 'update', tableName: 'loans', recordId: id, oldData: loan, newData: result.updatedLoan, req });
+      return res.json({ loan: result.updatedLoan, scheduleRebuilt: result.scheduleRebuilt });
+    }
 
     const { rows } = await query(
       `UPDATE loans SET person_name = $1, document = $2, phone = $3, due_date = $4, notes = $5
@@ -140,7 +237,7 @@ async function updateLoan(req, res, next) {
     );
 
     await logAudit({ userId: req.user.id, action: 'update', tableName: 'loans', recordId: id, oldData: existing[0], newData: rows[0], req });
-    res.json({ loan: rows[0] });
+    res.json({ loan: rows[0], scheduleRebuilt: false });
   } catch (err) {
     next(err);
   }
