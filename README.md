@@ -25,4 +25,3 @@ as 15 rotas compilando sem erros.
 
 Cada README (backend/frontend) documenta os módulos implementados e o que foi
 simplificado em relação ao prompt original, com total transparência.
-# sistema-de-gest-o-financeira

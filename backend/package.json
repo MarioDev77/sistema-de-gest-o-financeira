@@ -5,6 +5,7 @@
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {
+    "prestart": "node src/migrations/run.js",
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate": "node src/migrations/run.js",
