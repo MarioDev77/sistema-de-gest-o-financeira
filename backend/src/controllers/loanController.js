@@ -3,7 +3,7 @@ const { logAudit } = require('../utils/audit');
 const { calculateLoanTotal } = require('../utils/loanMath');
 
 const PAYMENT_METHODS = ['dinheiro', 'pix', 'debito', 'credito', 'transferencia', 'outros'];
-const INTEREST_TYPES = ['fixo', 'simples', 'por_parcela'];
+const INTEREST_TYPES = ['fixo', 'simples', 'por_parcela', 'mensal'];
 
 async function refreshOverdueLoans() {
   await query(

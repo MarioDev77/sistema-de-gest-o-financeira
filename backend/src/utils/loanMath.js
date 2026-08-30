@@ -25,7 +25,12 @@ function calculateLoanTotal({ principal, interestType, interestPercentage, insta
   // (endpoint /loans/:id/receive). Por isso o total inicial é só o principal;
   // ele cresce/diminui conforme os recebimentos de juros e abatimentos forem
   // registrados.
-  if (isOpenEnded) {
+  // "mensal" (único tipo oferecido no formulário hoje) e prazo indeterminado
+  // usam a mesma regra: nada de parcelas fixas nem redução automática do
+  // capital. O total inicial é só o principal; o que muda com o tempo são os
+  // juros recebidos mês a mês, lançados manualmente em /loans/:id/receive —
+  // o capital só muda quando o usuário registra um abatimento explícito.
+  if (isOpenEnded || interestType === 'mensal') {
     return Number(p.toFixed(2));
   }
 
