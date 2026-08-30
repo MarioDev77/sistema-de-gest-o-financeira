@@ -1,0 +1,36 @@
+const express = require('express');
+const authRoutes = require('./authRoutes');
+const userRoutes = require('./userRoutes');
+const categoryRoutes = require('./categoryRoutes');
+const productRoutes = require('./productRoutes');
+const stockRoutes = require('./stockRoutes');
+const customerRoutes = require('./customerRoutes');
+const saleRoutes = require('./saleRoutes');
+const expenseRoutes = require('./expenseRoutes');
+const cashFlowRoutes = require('./cashFlowRoutes');
+const dashboardRoutes = require('./dashboardRoutes');
+const loanRoutes = require('./loanRoutes');
+const balanceSheetRoutes = require('./balanceSheetRoutes');
+const reportRoutes = require('./reportRoutes');
+const aiRoutes = require('./aiRoutes');
+const monthlyClosingRoutes = require('./monthlyClosingRoutes');
+
+const router = express.Router();
+
+router.use('/auth', authRoutes);
+router.use('/users', userRoutes);
+router.use('/categories', categoryRoutes);
+router.use('/products', productRoutes);
+router.use('/stock-movements', stockRoutes);
+router.use('/customers', customerRoutes);
+router.use('/sales', saleRoutes);
+router.use('/expenses', expenseRoutes);
+router.use('/cash-movements', cashFlowRoutes);
+router.use('/dashboard', dashboardRoutes);
+router.use('/loans', loanRoutes);
+router.use('/balance-sheet', balanceSheetRoutes);
+router.use('/reports', reportRoutes);
+router.use('/ai', aiRoutes);
+router.use('/monthly-closings', monthlyClosingRoutes);
+
+module.exports = router;

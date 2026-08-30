@@ -1,0 +1,8 @@
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS cash_movements;
+DROP TABLE IF EXISTS expenses;
+DROP TABLE IF EXISTS stock_movements;
+DROP TABLE IF EXISTS payments;
+DROP TABLE IF EXISTS installments;
+DROP TABLE IF EXISTS sale_items;
+DROP TABLE IF EXISTS sales;
