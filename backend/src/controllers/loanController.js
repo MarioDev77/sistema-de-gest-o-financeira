@@ -33,6 +33,10 @@ async function listLoans(req, res, next) {
          -- parcelas, então todo recebimento deles cai como installment_id
          -- NULL e nunca era somado aqui, fazendo "Recebido" ficar em 0.
          COALESCE((SELECT SUM(amount) FROM loan_payments WHERE loan_id = l.id), 0) AS received,
+         -- Mesma fonte (loan_payments), mas restrita ao mês corrente, para
+         -- alimentar o card "Total recebido no mês" na listagem.
+         COALESCE((SELECT SUM(amount) FROM loan_payments WHERE loan_id = l.id
+           AND date_trunc('month', payment_date) = date_trunc('month', CURRENT_DATE)), 0) AS received_this_month,
          CASE WHEN l.is_open_ended THEN
            GREATEST(l.total_amount - COALESCE((SELECT SUM(amount) FROM loan_payments WHERE loan_id = l.id), 0), 0)
          ELSE

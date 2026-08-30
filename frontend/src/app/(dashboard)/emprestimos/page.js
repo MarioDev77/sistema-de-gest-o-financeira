@@ -425,7 +425,8 @@ export default function EmprestimosPage() {
     lent: acc.lent + Number(l.principal_amount),
     toReceive: acc.toReceive + Number(l.total_amount),
     received: acc.received + Number(l.received),
-  }), { lent: 0, toReceive: 0, received: 0 });
+    receivedThisMonth: acc.receivedThisMonth + Number(l.received_this_month || 0),
+  }), { lent: 0, toReceive: 0, received: 0, receivedThisMonth: 0 });
 
   const columns = [
     { key: 'person_name', label: 'Pessoa', render: (r) => (
@@ -456,10 +457,11 @@ export default function EmprestimosPage() {
         )}
       />
       <ErrorBanner message={error} />
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Total emprestado" value={money(totals.lent)} />
         <StatCard label="Total a receber" value={money(totals.toReceive)} />
-        <StatCard label="Total recebido" value={money(totals.received)} />
+        <StatCard label="Total recebido no mês" value={money(totals.receivedThisMonth)} />
+        <StatCard label="Total recebido (geral)" value={money(totals.received)} />
       </div>
       {loading ? <p className="text-mist">Carregando...</p> : <Table columns={columns} rows={loans} />}
 
