@@ -1,9 +1,9 @@
 'use client';
 
 import { useState } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import BrandMark from '@/components/BrandMark';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -31,10 +31,10 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-ink px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center text-gold">
-          <BrandMark className="h-9 w-9" />
-          <h1 className="mt-3 font-display text-2xl italic text-parchment">Livro-Caixa</h1>
+          <Image src="/logo.png" alt="Robson" width={72} height={55} className="h-14 w-auto" priority />
+          <h1 className="mt-3 font-display text-2xl italic text-parchment">Robson</h1>
           <p className="mt-1 text-xs uppercase tracking-[0.2em] text-parchment/40">
-            Gestão financeira
+            Store &amp; Finance
           </p>
         </div>
 

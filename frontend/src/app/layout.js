@@ -19,8 +19,16 @@ const inter = Inter({
 });
 
 export const metadata = {
-  title: 'Gestão Financeira — Perfumaria',
+  title: 'Robson — Store & Finance',
   description: 'Vendas, estoque, clientes, empréstimos e relatórios em um só lugar.',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/icon-32.png', type: 'image/png', sizes: '32x32' },
+      { url: '/icon-192.png', type: 'image/png', sizes: '192x192' },
+    ],
+    apple: '/apple-touch-icon.png',
+  },
 };
 
 export const viewport = {

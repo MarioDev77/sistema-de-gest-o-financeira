@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
-import BrandMark from './BrandMark';
 import { useAuth } from '@/context/AuthContext';
 
 const NAV_ITEMS = [
@@ -45,8 +45,13 @@ export default function Sidebar({ open, onClose }) {
       >
         <div className="mb-8 flex items-center justify-between px-2">
           <div className="flex items-center gap-2 text-gold">
-            <BrandMark className="h-6 w-6" />
-            <span className="font-display text-lg italic leading-none">Livro-Caixa</span>
+            <Image src="/logo.png" alt="Robson" width={28} height={22} className="h-7 w-auto" />
+            <div className="leading-none">
+              <span className="font-display block text-lg italic leading-none">Robson</span>
+              <span className="block text-[9px] uppercase tracking-[0.2em] text-parchment/40">
+                Store &amp; Finance
+              </span>
+            </div>
           </div>
           <button
             onClick={onClose}
