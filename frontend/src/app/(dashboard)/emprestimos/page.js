@@ -48,6 +48,7 @@ const EMPTY_PAYMENT_EDIT_FORM = {
 export default function EmprestimosPage() {
   const api = useApiClient();
   const [loans, setLoans] = useState([]);
+  const [receivedSummary, setReceivedSummary] = useState({ receivedTotal: 0, receivedThisMonth: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
@@ -100,6 +101,10 @@ export default function EmprestimosPage() {
     try {
       const data = await api.get('/loans');
       setLoans(data.loans);
+      // summary vem pronto do backend somando loan_payments + receipts
+      // (recibos avulsos), para os cards "Total recebido no mês/geral"
+      // baterem com tudo que já entrou, não só o que está preso a um empréstimo.
+      setReceivedSummary(data.summary || { receivedTotal: 0, receivedThisMonth: 0 });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -424,9 +429,7 @@ export default function EmprestimosPage() {
   const totals = loans.reduce((acc, l) => ({
     lent: acc.lent + Number(l.principal_amount),
     toReceive: acc.toReceive + Number(l.total_amount),
-    received: acc.received + Number(l.received),
-    receivedThisMonth: acc.receivedThisMonth + Number(l.received_this_month || 0),
-  }), { lent: 0, toReceive: 0, received: 0, receivedThisMonth: 0 });
+  }), { lent: 0, toReceive: 0 });
 
   const columns = [
     { key: 'person_name', label: 'Pessoa', render: (r) => (
@@ -460,8 +463,8 @@ export default function EmprestimosPage() {
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Total emprestado" value={money(totals.lent)} />
         <StatCard label="Total a receber" value={money(totals.toReceive)} />
-        <StatCard label="Total recebido no mês" value={money(totals.receivedThisMonth)} />
-        <StatCard label="Total recebido (geral)" value={money(totals.received)} />
+        <StatCard label="Total recebido no mês" value={money(receivedSummary.receivedThisMonth)} />
+        <StatCard label="Total recebido (geral)" value={money(receivedSummary.receivedTotal)} />
       </div>
       {loading ? <p className="text-mist">Carregando...</p> : <Table columns={columns} rows={loans} />}
 

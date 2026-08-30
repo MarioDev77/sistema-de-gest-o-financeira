@@ -45,7 +45,34 @@ async function listLoans(req, res, next) {
        FROM loans l WHERE ${conditions.join(' AND ')} ORDER BY l.loan_date DESC`,
       params
     );
-    res.json({ loans: rows });
+
+    // Totais dos cards do topo: somam tanto os recebimentos de empréstimo
+    // (loan_payments) quanto os recibos avulsos (receipts) — antes só se
+    // olhava loan_payments, então um recebimento lançado como "Recibo" (ex:
+    // recebimento sem vínculo com parcela) não entrava na conta.
+    const { rows: paymentAgg } = await query(
+      `SELECT
+         COALESCE(SUM(amount), 0) AS total,
+         COALESCE(SUM(amount) FILTER (
+           WHERE date_trunc('month', payment_date) = date_trunc('month', CURRENT_DATE)
+         ), 0) AS month
+       FROM loan_payments`
+    );
+    const { rows: receiptAgg } = await query(
+      `SELECT
+         COALESCE(SUM(amount), 0) AS total,
+         COALESCE(SUM(amount) FILTER (
+           WHERE date_trunc('month', receipt_date) = date_trunc('month', CURRENT_DATE)
+         ), 0) AS month
+       FROM receipts WHERE deleted_at IS NULL AND status <> 'cancelado'`
+    );
+
+    const summary = {
+      receivedTotal: Number(paymentAgg[0].total) + Number(receiptAgg[0].total),
+      receivedThisMonth: Number(paymentAgg[0].month) + Number(receiptAgg[0].month),
+    };
+
+    res.json({ loans: rows, summary });
   } catch (err) {
     next(err);
   }
