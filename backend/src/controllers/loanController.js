@@ -28,8 +28,16 @@ async function listLoans(req, res, next) {
 
     const { rows } = await query(
       `SELECT l.*,
-         COALESCE((SELECT SUM(paid_amount) FROM loan_installments WHERE loan_id = l.id), 0) AS received,
-         COALESCE((SELECT SUM(amount - paid_amount) FROM loan_installments WHERE loan_id = l.id AND status NOT IN ('cancelado')), 0) AS remaining
+         -- Usa loan_payments (não loan_installments.paid_amount) como fonte do
+         -- total recebido: empréstimos de prazo indeterminado não geram
+         -- parcelas, então todo recebimento deles cai como installment_id
+         -- NULL e nunca era somado aqui, fazendo "Recebido" ficar em 0.
+         COALESCE((SELECT SUM(amount) FROM loan_payments WHERE loan_id = l.id), 0) AS received,
+         CASE WHEN l.is_open_ended THEN
+           GREATEST(l.total_amount - COALESCE((SELECT SUM(amount) FROM loan_payments WHERE loan_id = l.id), 0), 0)
+         ELSE
+           COALESCE((SELECT SUM(amount - paid_amount) FROM loan_installments WHERE loan_id = l.id AND status NOT IN ('cancelado')), 0)
+         END AS remaining
        FROM loans l WHERE ${conditions.join(' AND ')} ORDER BY l.loan_date DESC`,
       params
     );
