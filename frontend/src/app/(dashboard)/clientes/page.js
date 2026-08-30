@@ -142,7 +142,7 @@ export default function ClientesPage() {
       <Modal open={historyOpen} onClose={() => setHistoryOpen(false)} title={history ? `Histórico — ${history.customer.name}` : ''} wide>
         {history && (
           <div className="space-y-4 text-sm">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink">
                 <p className="text-xs text-mist">Total comprado</p>
                 <p className="figures text-lg">{money(history.totals.totalPurchased)}</p>

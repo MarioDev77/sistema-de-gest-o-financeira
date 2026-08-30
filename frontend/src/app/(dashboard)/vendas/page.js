@@ -209,7 +209,7 @@ export default function VendasPage() {
             <button type="button" onClick={addItemRow} className="mt-2 text-xs text-gold hover:underline">+ adicionar item</button>
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Field label="Desconto (R$)"><Input type="number" step="0.01" value={saleForm.discount} onChange={(e) => setSaleForm({ ...saleForm, discount: e.target.value })} /></Field>
             <Field label="Acréscimo (R$)"><Input type="number" step="0.01" value={saleForm.surcharge} onChange={(e) => setSaleForm({ ...saleForm, surcharge: e.target.value })} /></Field>
             <Field label="Forma de pagamento">
@@ -227,7 +227,7 @@ export default function VendasPage() {
           </Field>
 
           {saleForm.saleType === 'aprazo' && (
-            <div className="grid grid-cols-2 gap-4 rounded-md bg-parchment-soft p-4 dark:bg-ink">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 rounded-md bg-parchment-soft p-4 dark:bg-ink">
               <Field label="Entrada (R$)"><Input type="number" step="0.01" value={saleForm.downPayment} onChange={(e) => setSaleForm({ ...saleForm, downPayment: e.target.value })} /></Field>
               <Field label="Número de parcelas"><Input type="number" min="1" value={saleForm.installmentsCount} onChange={(e) => setSaleForm({ ...saleForm, installmentsCount: e.target.value })} /></Field>
             </div>
@@ -268,7 +268,7 @@ export default function VendasPage() {
               rows={detail.items}
             />
 
-            <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="grid grid-cols-1 gap-3 text-center sm:grid-cols-3">
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Subtotal</p><p className="figures">{money(detail.sale.subtotal)}</p></div>
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Total</p><p className="figures">{money(detail.sale.total)}</p></div>
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Lucro</p><p className="figures">{money(detail.sale.profit)}</p></div>
@@ -282,7 +282,7 @@ export default function VendasPage() {
                 {(active) => active === 'parcelas' ? (
                   <div className="space-y-2">
                     {detail.installments.map((inst) => (
-                      <div key={inst.id} className="flex items-center justify-between rounded-md border border-ink-line/10 p-3 dark:border-parchment/10">
+                      <div key={inst.id} className="flex flex-col gap-2 rounded-md border border-ink-line/10 p-3 sm:flex-row sm:items-center sm:justify-between dark:border-parchment/10">
                         <div>
                           <p>Parcela {inst.installment_number} — venc. {shortDate(inst.due_date)}</p>
                           <p className="text-xs text-mist">{money(inst.paid_amount)} de {money(inst.amount)} pago</p>

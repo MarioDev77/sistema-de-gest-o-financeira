@@ -134,7 +134,7 @@ export default function ProdutosPage() {
       {loading ? <p className="text-mist">Carregando...</p> : <Table columns={columns} rows={products} />}
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editingId ? 'Editar produto' : 'Novo produto'} wide>
-        <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-4">
+        <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Nome"><Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
           <Field label="SKU"><Input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} /></Field>
           <Field label="Categoria">
@@ -156,10 +156,10 @@ export default function ProdutosPage() {
               <option value="inativo">Inativo</option>
             </Select>
           </Field>
-          <div className="col-span-2">
+          <div className="sm:col-span-2">
             <Field label="Descrição"><TextArea rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           </div>
-          <div className="col-span-2 flex justify-end gap-2 pt-2">
+          <div className="sm:col-span-2 flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" onClick={() => setModalOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</Button>
           </div>

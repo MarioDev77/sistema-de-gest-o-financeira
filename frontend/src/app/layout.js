@@ -1,6 +1,7 @@
 import { Fraunces, Inter } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/context/AuthContext';
+import RotateDeviceHint from '@/components/RotateDeviceHint';
 
 const fraunces = Fraunces({
   subsets: ['latin'],
@@ -20,6 +21,11 @@ const inter = Inter({
 export const metadata = {
   title: 'Gestão Financeira — Perfumaria',
   description: 'Vendas, estoque, clientes, empréstimos e relatórios em um só lugar.',
+};
+
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
 };
 
 // Script inline mínimo para aplicar o tema salvo ANTES da primeira pintura —
@@ -43,6 +49,7 @@ export default function RootLayout({ children }) {
       </head>
       <body>
         <AuthProvider>{children}</AuthProvider>
+        <RotateDeviceHint />
       </body>
     </html>
   );

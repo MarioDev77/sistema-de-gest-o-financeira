@@ -20,43 +20,70 @@ const NAV_ITEMS = [
   { label: 'Fechamento Mensal', href: '/fechamento', adminOnly: true },
 ];
 
-export default function Sidebar() {
+// Sidebar funciona como menu fixo em telas grandes (lg+) e como uma gaveta
+// deslizante com fundo escurecido em telas menores (celular/tablet retrato).
+export default function Sidebar({ open, onClose }) {
   const pathname = usePathname();
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
 
   return (
-    <aside className="flex h-screen w-60 flex-none flex-col overflow-y-auto border-r border-ink-line/60 bg-ink px-4 py-6 text-parchment">
-      <div className="mb-8 flex items-center gap-2 px-2 text-gold">
-        <BrandMark className="h-6 w-6" />
-        <span className="font-display text-lg italic leading-none">Livro-Caixa</span>
-      </div>
-
-      <nav className="flex-1 space-y-1">
-        {NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin).map((item) => {
-          const isActive = pathname === item.href;
-          return (
-            <Link
-              key={item.label}
-              href={item.href}
-              className={`block rounded-md px-3 py-2 text-sm transition ${
-                isActive
-                  ? 'bg-gold/15 text-gold'
-                  : 'text-parchment/80 hover:bg-parchment/5 hover:text-parchment'
-              }`}
-            >
-              {item.label}
-            </Link>
-          );
-        })}
-      </nav>
-
-      {user && (
-        <div className="mt-6 border-t border-ink-line/60 pt-4 px-2 text-xs text-parchment/50">
-          <p className="truncate text-parchment/80">{user.name}</p>
-          <p className="capitalize">{user.role === 'admin' ? 'Administrador' : 'Funcionário'}</p>
-        </div>
+    <>
+      {/* Fundo escurecido atrás da gaveta — só existe em telas < lg e só quando aberta */}
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
       )}
-    </aside>
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 flex h-screen w-64 flex-none transform flex-col overflow-y-auto border-r border-ink-line/60 bg-ink px-4 py-6 text-parchment transition-transform duration-200 ease-in-out lg:static lg:z-auto lg:w-60 lg:translate-x-0 ${
+          open ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <div className="mb-8 flex items-center justify-between px-2">
+          <div className="flex items-center gap-2 text-gold">
+            <BrandMark className="h-6 w-6" />
+            <span className="font-display text-lg italic leading-none">Livro-Caixa</span>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Fechar menu"
+            className="text-parchment/70 hover:text-parchment lg:hidden"
+          >
+            ✕
+          </button>
+        </div>
+
+        <nav className="flex-1 space-y-1">
+          {NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin).map((item) => {
+            const isActive = pathname === item.href;
+            return (
+              <Link
+                key={item.label}
+                href={item.href}
+                onClick={onClose}
+                className={`block rounded-md px-3 py-2 text-sm transition ${
+                  isActive
+                    ? 'bg-gold/15 text-gold'
+                    : 'text-parchment/80 hover:bg-parchment/5 hover:text-parchment'
+                }`}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {user && (
+          <div className="mt-6 border-t border-ink-line/60 pt-4 px-2 text-xs text-parchment/50">
+            <p className="truncate text-parchment/80">{user.name}</p>
+            <p className="capitalize">{user.role === 'admin' ? 'Administrador' : 'Funcionário'}</p>
+          </div>
+        )}
+      </aside>
+    </>
   );
 }

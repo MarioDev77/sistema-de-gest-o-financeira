@@ -122,7 +122,7 @@ export default function EmprestimosPage() {
     <div>
       <PageHeader eyebrow={`${loans.length} empréstimo(s)`} title="Empréstimos" action={<Button onClick={() => setModalOpen(true)}>+ Novo empréstimo</Button>} />
       <ErrorBanner message={error} />
-      <div className="mb-6 grid grid-cols-3 gap-4">
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard label="Total emprestado" value={money(totals.lent)} />
         <StatCard label="Total a receber" value={money(totals.toReceive)} />
         <StatCard label="Total recebido" value={money(totals.received)} />
@@ -130,7 +130,7 @@ export default function EmprestimosPage() {
       {loading ? <p className="text-mist">Carregando...</p> : <Table columns={columns} rows={loans} />}
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Novo empréstimo" wide>
-        <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-4">
+        <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Nome da pessoa"><Input required value={form.personName} onChange={(e) => setForm({ ...form, personName: e.target.value })} /></Field>
           <Field label="CPF/CNPJ (opcional)"><Input value={form.document} onChange={(e) => setForm({ ...form, document: e.target.value })} /></Field>
           <Field label="Telefone"><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
@@ -145,10 +145,10 @@ export default function EmprestimosPage() {
           <Field label="Juros (%)"><Input type="number" step="0.01" value={form.interestPercentage} onChange={(e) => setForm({ ...form, interestPercentage: e.target.value })} /></Field>
           <Field label="Data do empréstimo"><Input type="date" required value={form.loanDate} onChange={(e) => setForm({ ...form, loanDate: e.target.value })} /></Field>
           <Field label="Número de parcelas"><Input type="number" min="1" required value={form.installmentsCount} onChange={(e) => setForm({ ...form, installmentsCount: e.target.value })} /></Field>
-          <div className="col-span-2">
+          <div className="sm:col-span-2">
             <Field label="Observações"><TextArea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           </div>
-          <div className="col-span-2 flex justify-end gap-2 pt-2">
+          <div className="sm:col-span-2 flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" onClick={() => setModalOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Registrar'}</Button>
           </div>
@@ -164,7 +164,7 @@ export default function EmprestimosPage() {
                 <Button variant="danger" onClick={() => handleCancel(detail.loan.id)}>Cancelar empréstimo</Button>
               )}
             </div>
-            <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="grid grid-cols-1 gap-3 text-center sm:grid-cols-3">
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Principal</p><p className="figures">{money(detail.loan.principal_amount)}</p></div>
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Juros ({detail.loan.interest_percentage}%)</p><p className="figures">{money(detail.loan.total_amount - detail.loan.principal_amount)}</p></div>
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Total a receber</p><p className="figures">{money(detail.loan.total_amount)}</p></div>
@@ -176,7 +176,7 @@ export default function EmprestimosPage() {
               {(active) => active === 'parcelas' ? (
                 <div className="space-y-2">
                   {detail.installments.map((inst) => (
-                    <div key={inst.id} className="flex items-center justify-between rounded-md border border-ink-line/10 p-3 dark:border-parchment/10">
+                    <div key={inst.id} className="flex flex-col gap-2 rounded-md border border-ink-line/10 p-3 sm:flex-row sm:items-center sm:justify-between dark:border-parchment/10">
                       <div>
                         <p>Parcela {inst.installment_number} — venc. {shortDate(inst.due_date)}</p>
                         <p className="text-xs text-mist">{money(inst.paid_amount)} de {money(inst.amount)} pago</p>

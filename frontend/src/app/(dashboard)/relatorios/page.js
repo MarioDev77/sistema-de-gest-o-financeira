@@ -58,7 +58,7 @@ export default function RelatoriosPage() {
       <PageHeader eyebrow="PDF e Excel" title="Relatórios" />
       <ErrorBanner message={error} />
 
-      <div className="mb-6 grid max-w-md grid-cols-2 gap-4">
+      <div className="mb-6 grid max-w-md grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="De"><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
         <Field label="Até"><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></Field>
       </div>

@@ -39,7 +39,7 @@ export default function FluxoCaixaPage() {
     <div>
       <PageHeader eyebrow="Livro-caixa" title="Fluxo de Caixa" />
       <ErrorBanner message={error} />
-      <div className="mb-6 grid grid-cols-3 gap-4">
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard label="Total de entradas" value={money(summary.totalIn)} />
         <StatCard label="Total de saídas" value={money(summary.totalOut)} />
         <StatCard label="Saldo" value={money(summary.balance)} />

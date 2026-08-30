@@ -19,7 +19,7 @@ const TITLES = {
   '/fechamento': 'Fechamento Mensal',
 };
 
-export default function Topbar() {
+export default function Topbar({ onOpenSidebar }) {
   const { logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
@@ -31,13 +31,24 @@ export default function Topbar() {
   }
 
   return (
-    <header className="flex h-16 flex-none items-center justify-between border-b border-ink-line/10 bg-parchment px-8 dark:border-parchment/10 dark:bg-ink">
-      <h1 className="font-display text-xl italic text-ink dark:text-parchment">{title}</h1>
-      <div className="flex items-center gap-3">
+    <header className="flex h-16 flex-none items-center justify-between gap-3 border-b border-ink-line/10 bg-parchment px-4 sm:px-8 dark:border-parchment/10 dark:bg-ink">
+      <div className="flex min-w-0 items-center gap-3">
+        <button
+          onClick={onOpenSidebar}
+          aria-label="Abrir menu"
+          className="-ml-1 rounded-md p-1.5 text-ink hover:bg-parchment-soft lg:hidden dark:text-parchment dark:hover:bg-ink-soft"
+        >
+          <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" />
+          </svg>
+        </button>
+        <h1 className="truncate font-display text-lg italic text-ink sm:text-xl dark:text-parchment">{title}</h1>
+      </div>
+      <div className="flex flex-none items-center gap-2 sm:gap-3">
         <ThemeToggle />
         <button
           onClick={handleLogout}
-          className="rounded-full border border-bordeaux/30 px-3.5 py-1.5 text-xs font-medium text-bordeaux transition hover:bg-bordeaux/10"
+          className="rounded-full border border-bordeaux/30 px-3 py-1.5 text-xs font-medium text-bordeaux transition hover:bg-bordeaux/10 sm:px-3.5"
         >
           Sair
         </button>
