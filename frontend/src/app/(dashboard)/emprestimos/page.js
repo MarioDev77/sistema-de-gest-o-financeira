@@ -18,6 +18,10 @@ const EMPTY_FORM = {
   interestPercentage: '', loanDate: '', installmentsCount: '1', notes: '',
 };
 
+const EMPTY_RECEIPT_FORM = {
+  personName: '', amount: '', receiptDate: '', paymentMethod: 'dinheiro', notes: '',
+};
+
 export default function EmprestimosPage() {
   const api = useApiClient();
   const [loans, setLoans] = useState([]);
@@ -30,7 +34,12 @@ export default function EmprestimosPage() {
   const [detail, setDetail] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [payAmount, setPayAmount] = useState({});
-  const [downloadingReceipts, setDownloadingReceipts] = useState(false);
+
+  const [receipts, setReceipts] = useState([]);
+  const [receiptsLoading, setReceiptsLoading] = useState(true);
+  const [receiptModalOpen, setReceiptModalOpen] = useState(false);
+  const [receiptForm, setReceiptForm] = useState(EMPTY_RECEIPT_FORM);
+  const [savingReceipt, setSavingReceipt] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -44,7 +53,19 @@ export default function EmprestimosPage() {
     }
   }
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  async function loadReceipts() {
+    setReceiptsLoading(true);
+    try {
+      const data = await api.get('/receipts');
+      setReceipts(data.receipts);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setReceiptsLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); loadReceipts(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -90,15 +111,32 @@ export default function EmprestimosPage() {
     }
   }
 
-  async function handleDownloadReceipts() {
-    setDownloadingReceipts(true);
+  async function handleReceiptSubmit(e) {
+    e.preventDefault();
+    setSavingReceipt(true);
     setError('');
     try {
-      await api.download('/reports/pdf/emprestimos', 'recibos-emprestimos.pdf');
+      await api.post('/receipts', {
+        ...receiptForm,
+        amount: Number(receiptForm.amount),
+      });
+      setReceiptModalOpen(false);
+      setReceiptForm(EMPTY_RECEIPT_FORM);
+      await loadReceipts();
     } catch (err) {
       setError(err.message);
     } finally {
-      setDownloadingReceipts(false);
+      setSavingReceipt(false);
+    }
+  }
+
+  async function handleCancelReceipt(id) {
+    if (!confirm('Cancelar este recibo?')) return;
+    try {
+      await api.post(`/receipts/${id}/cancel`);
+      await loadReceipts();
+    } catch (err) {
+      setError(err.message);
     }
   }
 
@@ -138,9 +176,7 @@ export default function EmprestimosPage() {
         title="Empréstimos"
         action={(
           <div className="flex gap-2">
-            <Button variant="ghost" onClick={handleDownloadReceipts} disabled={downloadingReceipts}>
-              {downloadingReceipts ? 'Gerando...' : 'Recibos'}
-            </Button>
+            <Button variant="ghost" onClick={() => setReceiptModalOpen(true)}>+ Recibo</Button>
             <Button onClick={() => setModalOpen(true)}>+ Novo empréstimo</Button>
           </div>
         )}
@@ -152,6 +188,33 @@ export default function EmprestimosPage() {
         <StatCard label="Total recebido" value={money(totals.received)} />
       </div>
       {loading ? <p className="text-mist">Carregando...</p> : <Table columns={columns} rows={loans} />}
+
+      <div className="mt-10">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-display text-lg italic text-ink dark:text-parchment">Recibos avulsos</h3>
+          <span className="text-xs text-mist">{receipts.length} recibo(s)</span>
+        </div>
+        {receiptsLoading ? (
+          <p className="text-mist">Carregando...</p>
+        ) : (
+          <Table
+            columns={[
+              { key: 'person_name', label: 'Pessoa' },
+              { key: 'amount', label: 'Valor', align: 'right', render: (r) => money(r.amount) },
+              { key: 'receipt_date', label: 'Data', render: (r) => shortDate(r.receipt_date) },
+              { key: 'payment_method', label: 'Forma', render: (r) => paymentMethodLabel(r.payment_method) },
+              { key: 'status', label: 'Status', render: (r) => <Badge status={r.status} /> },
+              { key: 'actions', label: '', render: (r) => (
+                r.status !== 'cancelado' && (
+                  <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => handleCancelReceipt(r.id)}>Cancelar</Button>
+                )
+              ) },
+            ]}
+            rows={receipts}
+            emptyLabel="Nenhum recibo registrado ainda."
+          />
+        )}
+      </div>
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Novo empréstimo" wide>
         <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -175,6 +238,29 @@ export default function EmprestimosPage() {
           <div className="sm:col-span-2 flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" onClick={() => setModalOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Registrar'}</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={receiptModalOpen} onClose={() => setReceiptModalOpen(false)} title="Novo recibo">
+        <form onSubmit={handleReceiptSubmit} className="grid grid-cols-1 gap-4">
+          <Field label="Nome da pessoa"><Input required value={receiptForm.personName} onChange={(e) => setReceiptForm({ ...receiptForm, personName: e.target.value })} /></Field>
+          <Field label="Valor recebido (R$)"><Input type="number" step="0.01" required value={receiptForm.amount} onChange={(e) => setReceiptForm({ ...receiptForm, amount: e.target.value })} /></Field>
+          <Field label="Data do recebimento"><Input type="date" required value={receiptForm.receiptDate} onChange={(e) => setReceiptForm({ ...receiptForm, receiptDate: e.target.value })} /></Field>
+          <Field label="Forma de pagamento">
+            <Select value={receiptForm.paymentMethod} onChange={(e) => setReceiptForm({ ...receiptForm, paymentMethod: e.target.value })}>
+              <option value="dinheiro">Dinheiro</option>
+              <option value="pix">PIX</option>
+              <option value="debito">Débito</option>
+              <option value="credito">Crédito</option>
+              <option value="transferencia">Transferência</option>
+              <option value="outros">Outros</option>
+            </Select>
+          </Field>
+          <Field label="Observações"><TextArea rows={2} value={receiptForm.notes} onChange={(e) => setReceiptForm({ ...receiptForm, notes: e.target.value })} /></Field>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="ghost" onClick={() => setReceiptModalOpen(false)}>Cancelar</Button>
+            <Button type="submit" disabled={savingReceipt}>{savingReceipt ? 'Salvando...' : 'Registrar'}</Button>
           </div>
         </form>
       </Modal>
