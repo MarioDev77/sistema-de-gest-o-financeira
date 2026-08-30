@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useApiClient } from '@/lib/useApiClient';
-import { money, shortDate, dateTime, paymentMethodLabel } from '@/lib/format';
+import { money, shortDate, dateTime, paymentMethodLabel, percent } from '@/lib/format';
 import PageHeader from '@/components/ui/PageHeader';
 import Button from '@/components/ui/Button';
 import Table from '@/components/ui/Table';
@@ -18,6 +18,14 @@ import Tabs from '@/components/ui/Tabs';
 // editável mais pelo formulário, só exibido) — por isso o valor
 // "indeterminado" continua existindo internamente.
 const INDETERMINADO = 'indeterminado';
+
+// Atalhos de porcentagem de juros mais usados — o campo continua livre para
+// digitar qualquer valor, isso só evita ter que digitar os mais comuns.
+const PERCENT_PRESETS = [10, 15, 20, 30];
+
+const EMPTY_AMORT_FORM = {
+  loanId: '', amount: '', paymentMethod: 'dinheiro', notes: '',
+};
 
 const EMPTY_FORM = {
   personName: '', document: '', phone: '', principalAmount: '', interestType: 'mensal',
@@ -73,6 +81,12 @@ export default function EmprestimosPage() {
 
   const [receiveForm, setReceiveForm] = useState(EMPTY_RECEIVE_FORM);
   const [savingReceive, setSavingReceive] = useState(false);
+
+  // Botão "Amortização" no topo — abate o capital de um cliente sem precisar
+  // abrir o empréstimo dele primeiro.
+  const [amortModalOpen, setAmortModalOpen] = useState(false);
+  const [amortForm, setAmortForm] = useState(EMPTY_AMORT_FORM);
+  const [savingAmort, setSavingAmort] = useState(false);
 
   const [interestModalOpen, setInterestModalOpen] = useState(false);
   const [interestPayments, setInterestPayments] = useState([]);
@@ -315,6 +329,41 @@ export default function EmprestimosPage() {
     }
   }
 
+  // Empréstimos ativos (ainda com saldo a receber), pra popular o seletor de
+  // cliente do botão "Amortização" no topo da página.
+  const activeLoans = loans.filter((l) => l.status !== 'cancelado' && l.status !== 'pago');
+  const selectedAmortLoan = activeLoans.find((l) => String(l.id) === String(amortForm.loanId));
+
+  async function handleAmortSubmit(e) {
+    e.preventDefault();
+    setSavingAmort(true);
+    setError('');
+    try {
+      // Mesmo endpoint de "Registrar recebimento", só que só com abatimento
+      // do capital (sem juros) e escolhendo o cliente aqui mesmo, sem precisar
+      // abrir o empréstimo dele primeiro. Já desconta na hora do saldo do
+      // capital (aparece em "Restante" na lista e em "Saldo do capital" no
+      // detalhe do empréstimo).
+      await api.post(`/loans/${amortForm.loanId}/receive`, {
+        interestAmount: 0,
+        principalAmount: Number(amortForm.amount) || 0,
+        paymentMethod: amortForm.paymentMethod,
+        notes: amortForm.notes,
+      });
+      setAmortModalOpen(false);
+      setAmortForm(EMPTY_AMORT_FORM);
+      await load();
+      if (detail && String(detail.loan.id) === String(amortForm.loanId)) {
+        const data = await api.get(`/loans/${amortForm.loanId}`);
+        setDetail(data);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingAmort(false);
+    }
+  }
+
   function openEditReceipt(receipt) {
     setEditingReceiptId(receipt.id);
     setReceiptEditForm({
@@ -468,6 +517,7 @@ export default function EmprestimosPage() {
         action={(
           <div className="flex gap-2">
             <Button variant="ghost" onClick={openInterestModal}>Juros por mês</Button>
+            <Button variant="ghost" onClick={() => { setAmortForm(EMPTY_AMORT_FORM); setAmortModalOpen(true); }}>+ Amortização</Button>
             <Button variant="ghost" onClick={() => setReceiptModalOpen(true)}>+ Recibo</Button>
             <Button onClick={() => setModalOpen(true)}>+ Novo empréstimo</Button>
           </div>
@@ -522,6 +572,22 @@ export default function EmprestimosPage() {
           </Field>
           <Field label="Juros por mês (%)">
             <Input type="number" step="0.01" value={form.interestPercentage} onChange={(e) => setForm({ ...form, interestPercentage: e.target.value })} />
+            <div className="mt-2 flex flex-wrap gap-2">
+              {PERCENT_PRESETS.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setForm({ ...form, interestPercentage: String(p) })}
+                  className={`rounded-full border px-3 py-1 text-xs ${
+                    String(form.interestPercentage) === String(p)
+                      ? 'border-gold bg-gold/10 text-gold'
+                      : 'border-ink-line/20 text-mist hover:border-gold dark:border-parchment/20'
+                  }`}
+                >
+                  {p}%
+                </button>
+              ))}
+            </div>
           </Field>
           <Field label="Data do empréstimo"><Input type="date" required value={form.loanDate} onChange={(e) => setForm({ ...form, loanDate: e.target.value })} /></Field>
           <div className="sm:col-span-2">
@@ -536,6 +602,46 @@ export default function EmprestimosPage() {
           <div className="sm:col-span-2 flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" onClick={() => setModalOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={saving}>{saving ? 'Salvando...' : 'Registrar'}</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={amortModalOpen} onClose={() => setAmortModalOpen(false)} title="Amortização — abater capital">
+        <form onSubmit={handleAmortSubmit} className="grid grid-cols-1 gap-4">
+          <p className="text-xs text-mist">
+            Escolha o cliente e o valor recebido para abater direto do capital emprestado
+            (sem contar como juros). O saldo do capital dele já é descontado na hora.
+          </p>
+          <Field label="Cliente">
+            <Select required value={amortForm.loanId} onChange={(e) => setAmortForm({ ...amortForm, loanId: e.target.value })}>
+              <option value="">Selecione...</option>
+              {activeLoans.map((l) => (
+                <option key={l.id} value={l.id}>{l.person_name} — saldo {money(l.principal_remaining)}</option>
+              ))}
+            </Select>
+          </Field>
+          {selectedAmortLoan && (
+            <p className="-mt-2 text-xs text-mist">
+              Saldo atual do capital de <strong>{selectedAmortLoan.person_name}</strong>: {money(selectedAmortLoan.principal_remaining)}
+            </p>
+          )}
+          <Field label="Valor recebido para abater o capital (R$)">
+            <CurrencyInput required value={amortForm.amount} onValueChange={(v) => setAmortForm({ ...amortForm, amount: v })} />
+          </Field>
+          <Field label="Forma de pagamento">
+            <Select value={amortForm.paymentMethod} onChange={(e) => setAmortForm({ ...amortForm, paymentMethod: e.target.value })}>
+              <option value="dinheiro">Dinheiro</option>
+              <option value="pix">PIX</option>
+              <option value="debito">Débito</option>
+              <option value="credito">Crédito</option>
+              <option value="transferencia">Transferência</option>
+              <option value="outros">Outros</option>
+            </Select>
+          </Field>
+          <Field label="Observações"><Input value={amortForm.notes} onChange={(e) => setAmortForm({ ...amortForm, notes: e.target.value })} /></Field>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="ghost" onClick={() => setAmortModalOpen(false)}>Cancelar</Button>
+            <Button type="submit" disabled={savingAmort}>{savingAmort ? 'Registrando...' : 'Registrar amortização'}</Button>
           </div>
         </form>
       </Modal>
@@ -588,6 +694,22 @@ export default function EmprestimosPage() {
             <Field label="Juros por mês (%)">
               <Input type="number" step="0.01" value={editForm.interestPercentage}
                 onChange={(e) => setEditForm({ ...editForm, interestPercentage: e.target.value })} />
+              <div className="mt-2 flex flex-wrap gap-2">
+                {PERCENT_PRESETS.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setEditForm({ ...editForm, interestPercentage: String(p) })}
+                    className={`rounded-full border px-3 py-1 text-xs ${
+                      String(editForm.interestPercentage) === String(p)
+                        ? 'border-gold bg-gold/10 text-gold'
+                        : 'border-ink-line/20 text-mist hover:border-gold dark:border-parchment/20'
+                    }`}
+                  >
+                    {p}%
+                  </button>
+                ))}
+              </div>
             </Field>
           )}
           <Field label="Data do empréstimo">
@@ -776,9 +898,10 @@ export default function EmprestimosPage() {
                 )}
               </div>
             </div>
-            <div className="grid grid-cols-1 gap-3 text-center sm:grid-cols-3">
-              <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Principal</p><p className="figures">{money(detail.loan.principal_amount)}</p></div>
-              <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Juros ({detail.loan.interest_percentage}%)</p><p className="figures">{money(detail.loan.total_amount - detail.loan.principal_amount)}</p></div>
+            <div className="grid grid-cols-1 gap-3 text-center sm:grid-cols-4">
+              <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Principal emprestado</p><p className="figures">{money(detail.loan.principal_amount)}</p></div>
+              <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Saldo do capital</p><p className="figures">{money(detail.loan.principal_remaining)}</p></div>
+              <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Juros ({percent(detail.loan.interest_percentage)})</p><p className="figures">{money(detail.loan.total_amount - detail.loan.principal_amount)}</p></div>
               <div className="rounded-md bg-parchment-soft p-3 dark:bg-ink"><p className="text-xs text-mist">Total a receber</p><p className="figures">{money(detail.loan.total_amount)}</p></div>
             </div>
 

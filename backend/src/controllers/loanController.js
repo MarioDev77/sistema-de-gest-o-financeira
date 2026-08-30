@@ -41,7 +41,10 @@ async function listLoans(req, res, next) {
            GREATEST(l.total_amount - COALESCE((SELECT SUM(amount) FROM loan_payments WHERE loan_id = l.id), 0), 0)
          ELSE
            COALESCE((SELECT SUM(amount - paid_amount) FROM loan_installments WHERE loan_id = l.id AND status NOT IN ('cancelado')), 0)
-         END AS remaining
+         END AS remaining,
+         -- Saldo do capital emprestado (só o que já foi abatido de principal,
+         -- sem contar juros) — é o que o botão "Amortização" mostra e desconta.
+         GREATEST(l.principal_amount - COALESCE((SELECT SUM(principal_portion) FROM loan_payments WHERE loan_id = l.id), 0), 0) AS principal_remaining
        FROM loans l WHERE ${conditions.join(' AND ')} ORDER BY l.loan_date DESC`,
       params
     );
@@ -82,7 +85,21 @@ async function getLoan(req, res, next) {
   try {
     await refreshOverdueLoans();
     const id = Number(req.params.id);
-    const { rows } = await query('SELECT * FROM loans WHERE id = $1 AND deleted_at IS NULL', [id]);
+    // Mesmo cálculo de "remaining" (saldo do capital) usado na listagem, para
+    // que o botão de amortização e a tela de detalhe mostrem o saldo já
+    // descontado assim que um recebimento é registrado.
+    const { rows } = await query(
+      `SELECT l.*,
+         COALESCE((SELECT SUM(amount) FROM loan_payments WHERE loan_id = l.id), 0) AS received,
+         CASE WHEN l.is_open_ended THEN
+           GREATEST(l.total_amount - COALESCE((SELECT SUM(amount) FROM loan_payments WHERE loan_id = l.id), 0), 0)
+         ELSE
+           COALESCE((SELECT SUM(amount - paid_amount) FROM loan_installments WHERE loan_id = l.id AND status NOT IN ('cancelado')), 0)
+         END AS remaining,
+         GREATEST(l.principal_amount - COALESCE((SELECT SUM(principal_portion) FROM loan_payments WHERE loan_id = l.id), 0), 0) AS principal_remaining
+       FROM loans l WHERE l.id = $1 AND l.deleted_at IS NULL`,
+      [id]
+    );
     if (rows.length === 0) return res.status(404).json({ error: 'Empréstimo não encontrado.' });
 
     const { rows: installments } = await query(

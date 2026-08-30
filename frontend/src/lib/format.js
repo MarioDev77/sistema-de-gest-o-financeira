@@ -26,6 +26,17 @@ export function shortDate(value) {
   return new Date(value).toLocaleDateString('pt-BR');
 }
 
+/**
+ * Formata uma porcentagem de forma limpa: 10.00 -> "10%", 12.5 -> "12,5%".
+ * Antes o valor de juros era exibido cru (ex: "10.00%"), o que muita gente
+ * lê como se fosse dinheiro ("dez vírgula zero zero") em vez de "10%".
+ */
+export function percent(value) {
+  const num = Number(value || 0);
+  const rounded = Math.round(num * 100) / 100;
+  return `${rounded.toString().replace('.', ',')}%`;
+}
+
 export function dateTime(value) {
   if (!value) return '—';
   return new Date(value).toLocaleString('pt-BR', {
