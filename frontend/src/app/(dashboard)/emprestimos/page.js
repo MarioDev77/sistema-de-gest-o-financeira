@@ -14,14 +14,14 @@ import Field, { Input, Select, TextArea } from '@/components/ui/Field';
 import CurrencyInput from '@/components/ui/CurrencyInput';
 import Tabs from '@/components/ui/Tabs';
 
-// 1 a cada 1 mês, até 48 meses — ou prazo indeterminado (sem parcelas fixas,
-// juros lançados mês a mês em "Registrar recebimento").
-const INSTALLMENT_OPTIONS = Array.from({ length: 48 }, (_, i) => i + 1);
+// Empréstimos antigos ainda podem ter um esquema de parcelas fixas (não
+// editável mais pelo formulário, só exibido) — por isso o valor
+// "indeterminado" continua existindo internamente.
 const INDETERMINADO = 'indeterminado';
 
 const EMPTY_FORM = {
-  personName: '', document: '', phone: '', principalAmount: '', interestType: 'fixo',
-  interestPercentage: '', loanDate: '', installmentsCount: '1', notes: '',
+  personName: '', document: '', phone: '', principalAmount: '', interestType: 'mensal',
+  interestPercentage: '', loanDate: '', notes: '',
 };
 
 const EMPTY_RECEIPT_FORM = {
@@ -30,7 +30,7 @@ const EMPTY_RECEIPT_FORM = {
 
 const EMPTY_EDIT_FORM = {
   personName: '', document: '', phone: '', dueDate: '', notes: '',
-  principalAmount: '', interestType: 'fixo', interestPercentage: '', loanDate: '', installmentsCount: '1',
+  principalAmount: '', interestType: 'mensal', interestPercentage: '', loanDate: '', installmentsCount: '1',
 };
 
 const EMPTY_RECEIVE_FORM = {
@@ -131,13 +131,16 @@ export default function EmprestimosPage() {
     setSaving(true);
     setError('');
     try {
-      const isOpenEnded = form.installmentsCount === INDETERMINADO;
+      // Único modelo hoje: juros por mês sobre o capital, sem parcelas fixas
+      // e sem abater o capital automaticamente (mesmo motor de "prazo
+      // indeterminado" que já existia).
       await api.post('/loans', {
         ...form,
         principalAmount: Number(form.principalAmount),
+        interestType: 'mensal',
         interestPercentage: Number(form.interestPercentage) || 0,
-        isOpenEnded,
-        installmentsCount: isOpenEnded ? null : Number(form.installmentsCount),
+        isOpenEnded: true,
+        installmentsCount: null,
       });
       setModalOpen(false);
       setForm(EMPTY_FORM);
@@ -220,7 +223,7 @@ export default function EmprestimosPage() {
       dueDate: loan.due_date ? loan.due_date.slice(0, 10) : '',
       notes: loan.notes || '',
       principalAmount: loan.principal_amount || '',
-      interestType: loan.interest_type || 'fixo',
+      interestType: loan.interest_type || 'mensal',
       interestPercentage: loan.interest_percentage || '',
       loanDate: loan.loan_date ? loan.loan_date.slice(0, 10) : '',
       installmentsCount: loan.is_open_ended ? INDETERMINADO : String(loan.installments_count || 1),
@@ -254,14 +257,25 @@ export default function EmprestimosPage() {
     setSavingEdit(true);
     setError('');
     try {
-      const isOpenEnded = editForm.installmentsCount === INDETERMINADO;
-      const payload = {
-        ...editForm,
-        principalAmount: Number(editForm.principalAmount),
-        interestPercentage: Number(editForm.interestPercentage) || 0,
-        isOpenEnded,
-        installmentsCount: isOpenEnded ? null : Number(editForm.installmentsCount),
-      };
+      // Se o empréstimo já tem recebimento, o valor/juros/parcelas já vêm
+      // desabilitados no formulário — manda como já estava, sem mexer no
+      // capital ou no total. Se ainda não tem nenhum recebimento, aplica o
+      // modelo único "juros por mês" (mesma regra do "prazo indeterminado").
+      const wasOpenEnded = editForm.installmentsCount === INDETERMINADO;
+      const payload = editHasPayments
+        ? {
+            ...editForm,
+            isOpenEnded: wasOpenEnded,
+            installmentsCount: wasOpenEnded ? null : Number(editForm.installmentsCount),
+          }
+        : {
+            ...editForm,
+            interestType: 'mensal',
+            isOpenEnded: true,
+            installmentsCount: null,
+          };
+      payload.principalAmount = Number(payload.principalAmount);
+      payload.interestPercentage = Number(payload.interestPercentage) || 0;
       const result = await api.put(`/loans/${editingLoanId}`, payload);
       if (result.scheduleRebuilt === false) {
         setError('Nome/observações atualizados. Valor, juros e parcelas não foram alterados porque este empréstimo já tem recebimentos registrados.');
@@ -506,23 +520,16 @@ export default function EmprestimosPage() {
           <Field label="Valor emprestado (R$)">
             <CurrencyInput required value={form.principalAmount} onValueChange={(v) => setForm({ ...form, principalAmount: v })} />
           </Field>
-          <Field label="Tipo de juros">
-            <Select value={form.interestType} onChange={(e) => setForm({ ...form, interestType: e.target.value })}>
-              <option value="fixo">Fixo (uma vez)</option>
-              <option value="simples">Simples (por parcela)</option>
-              <option value="por_parcela">Cobrado por parcela</option>
-            </Select>
+          <Field label="Juros por mês (%)">
+            <Input type="number" step="0.01" value={form.interestPercentage} onChange={(e) => setForm({ ...form, interestPercentage: e.target.value })} />
           </Field>
-          <Field label="Juros (%)"><Input type="number" step="0.01" value={form.interestPercentage} onChange={(e) => setForm({ ...form, interestPercentage: e.target.value })} /></Field>
           <Field label="Data do empréstimo"><Input type="date" required value={form.loanDate} onChange={(e) => setForm({ ...form, loanDate: e.target.value })} /></Field>
-          <Field label="Número de parcelas (1 a cada mês)">
-            <Select value={form.installmentsCount} onChange={(e) => setForm({ ...form, installmentsCount: e.target.value })}>
-              {INSTALLMENT_OPTIONS.map((n) => (
-                <option key={n} value={n}>{n} {n === 1 ? 'mês' : 'meses'}</option>
-              ))}
-              <option value={INDETERMINADO}>Prazo indeterminado (sem parcelas fixas)</option>
-            </Select>
-          </Field>
+          <div className="sm:col-span-2">
+            <p className="text-xs text-mist">
+              Juros cobrados mês a mês sobre o valor emprestado, sem parcelas fixas — ex: R$1.000 a 10% = R$100 de juros por mês.
+              O capital só muda quando você registrar um abatimento em &quot;Registrar recebimento&quot;.
+            </p>
+          </div>
           <div className="sm:col-span-2">
             <Field label="Observações"><TextArea rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           </div>
@@ -573,37 +580,43 @@ export default function EmprestimosPage() {
             <CurrencyInput required disabled={editHasPayments} value={editForm.principalAmount}
               onValueChange={(v) => setEditForm({ ...editForm, principalAmount: v })} />
           </Field>
-          <Field label="Tipo de juros">
-            <Select disabled={editHasPayments} value={editForm.interestType} onChange={(e) => setEditForm({ ...editForm, interestType: e.target.value })}>
-              <option value="fixo">Fixo (uma vez)</option>
-              <option value="simples">Simples (por parcela)</option>
-              <option value="por_parcela">Cobrado por parcela</option>
-            </Select>
-          </Field>
-          <Field label="Juros (%)">
-            <Input type="number" step="0.01" disabled={editHasPayments} value={editForm.interestPercentage}
-              onChange={(e) => setEditForm({ ...editForm, interestPercentage: e.target.value })} />
-          </Field>
+          {editHasPayments ? (
+            <Field label="Juros (%)">
+              <Input type="number" step="0.01" disabled value={editForm.interestPercentage} />
+            </Field>
+          ) : (
+            <Field label="Juros por mês (%)">
+              <Input type="number" step="0.01" value={editForm.interestPercentage}
+                onChange={(e) => setEditForm({ ...editForm, interestPercentage: e.target.value })} />
+            </Field>
+          )}
           <Field label="Data do empréstimo">
             <Input type="date" disabled={editHasPayments} value={editForm.loanDate}
               onChange={(e) => setEditForm({ ...editForm, loanDate: e.target.value })} />
           </Field>
-          <Field label="Número de parcelas (1 a cada mês)">
-            <Select disabled={editHasPayments} value={editForm.installmentsCount}
-              onChange={(e) => setEditForm({ ...editForm, installmentsCount: e.target.value })}>
-              {INSTALLMENT_OPTIONS.map((n) => (
-                <option key={n} value={n}>{n} {n === 1 ? 'mês' : 'meses'}</option>
-              ))}
-              <option value={INDETERMINADO}>Prazo indeterminado (sem parcelas fixas)</option>
-            </Select>
-          </Field>
-          {editForm.installmentsCount === INDETERMINADO && (
-            <div className="sm:col-span-2" />
-          )}
-          {editForm.installmentsCount !== INDETERMINADO && (
-            <Field label="Vencimento (próxima parcela / geral)">
+          {editHasPayments ? (
+            // Empréstimo antigo, com esquema de parcelas fixas e recebimentos já
+            // lançados — só exibe informação, não deixa trocar (evita descasar
+            // valor já pago). Novos empréstimos não geram mais esse esquema.
+            <Field label="Esquema de parcelas (não editável)">
+              <p className="pt-2 text-sm text-mist">
+                {editForm.installmentsCount === INDETERMINADO
+                  ? 'Prazo indeterminado (sem parcelas fixas)'
+                  : `${editForm.installmentsCount} ${Number(editForm.installmentsCount) === 1 ? 'mês' : 'meses'}`}
+              </p>
+            </Field>
+          ) : (
+            <Field label="Vencimento (opcional)">
               <Input type="date" value={editForm.dueDate} onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })} />
             </Field>
+          )}
+          {!editHasPayments && (
+            <div className="sm:col-span-2">
+              <p className="text-xs text-mist">
+                Juros cobrados mês a mês sobre o valor emprestado, sem parcelas fixas — ex: R$1.000 a 10% = R$100 de juros por mês.
+                O capital só muda quando você registrar um abatimento em &quot;Registrar recebimento&quot;.
+              </p>
+            </div>
           )}
           <div className="sm:col-span-2">
             <Field label="Observações"><TextArea rows={2} value={editForm.notes} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} /></Field>
