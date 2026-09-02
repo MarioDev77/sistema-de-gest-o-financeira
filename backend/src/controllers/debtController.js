@@ -36,7 +36,11 @@ async function listDebts(req, res, next) {
     const { rows } = await query(
       `SELECT d.*,
          COALESCE((SELECT SUM(paid_amount) FROM debt_installments WHERE debt_id = d.id), 0) AS paid,
-         COALESCE((SELECT SUM(amount - paid_amount) FROM debt_installments WHERE debt_id = d.id AND status NOT IN ('cancelado')), 0) AS remaining
+         COALESCE((SELECT SUM(amount - paid_amount) FROM debt_installments WHERE debt_id = d.id AND status NOT IN ('cancelado')), 0) AS remaining,
+         -- Saldo do capital da dívida (só o que já foi abatido de principal,
+         -- sem contar juros) — é o que o botão "Amortização" mostra e desconta,
+         -- no mesmo modelo já usado em Empréstimos.
+         GREATEST(d.principal_amount - COALESCE((SELECT SUM(principal_portion) FROM debt_payments WHERE debt_id = d.id), 0), 0) AS principal_remaining
        FROM debts d WHERE ${conditions.join(' AND ')} ORDER BY d.debt_date DESC`,
       params
     );
@@ -50,7 +54,17 @@ async function getDebt(req, res, next) {
   try {
     await refreshOverdueDebts();
     const id = Number(req.params.id);
-    const { rows } = await query('SELECT * FROM debts WHERE id = $1 AND deleted_at IS NULL', [id]);
+    // Mesmo cálculo de "saldo do capital" usado na listagem, para que o botão
+    // de amortização e a tela de detalhe mostrem o saldo já descontado assim
+    // que um pagamento é registrado.
+    const { rows } = await query(
+      `SELECT d.*,
+         COALESCE((SELECT SUM(paid_amount) FROM debt_installments WHERE debt_id = d.id), 0) AS paid,
+         COALESCE((SELECT SUM(amount - paid_amount) FROM debt_installments WHERE debt_id = d.id AND status NOT IN ('cancelado')), 0) AS remaining,
+         GREATEST(d.principal_amount - COALESCE((SELECT SUM(principal_portion) FROM debt_payments WHERE debt_id = d.id), 0), 0) AS principal_remaining
+       FROM debts d WHERE d.id = $1 AND d.deleted_at IS NULL`,
+      [id]
+    );
     if (rows.length === 0) return res.status(404).json({ error: 'Dívida não encontrada.' });
 
     const { rows: installments } = await query(
@@ -330,6 +344,245 @@ async function payDebt(req, res, next) {
   }
 }
 
+/**
+ * Paga uma parcela específica da dívida (botão "Pagar" na aba "Parcelas" do
+ * detalhe) — espelho de payLoanInstallment. O valor é dividido entre juros e
+ * principal na mesma proporção da parcela, para diferenciar quanto foi
+ * amortização de capital e quanto foi juros pago ao credor.
+ */
+async function payDebtInstallment(req, res, next) {
+  try {
+    const installmentId = Number(req.params.id);
+    const { amount, paymentMethod, notes } = req.body;
+
+    if (!amount || Number(amount) <= 0) return res.status(400).json({ error: 'Valor inválido.' });
+    if (!PAYMENT_METHODS.includes(paymentMethod)) return res.status(400).json({ error: 'Forma de pagamento inválida.' });
+
+    const result = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `SELECT di.*, d.creditor_name, d.principal_amount, d.total_amount
+         FROM debt_installments di JOIN debts d ON d.id = di.debt_id
+         WHERE di.id = $1 FOR UPDATE`,
+        [installmentId]
+      );
+      if (rows.length === 0) {
+        const err = new Error('Parcela não encontrada.');
+        err.status = 404;
+        throw err;
+      }
+      const installment = rows[0];
+      if (['pago', 'cancelado'].includes(installment.status)) {
+        const err = new Error('Esta parcela já está quitada ou cancelada.');
+        err.status = 400;
+        throw err;
+      }
+
+      const remaining = Number(installment.amount) - Number(installment.paid_amount);
+      if (Number(amount) > remaining + 0.01) {
+        const err = new Error(`Valor excede o saldo restante (R$ ${remaining.toFixed(2)}).`);
+        err.status = 400;
+        throw err;
+      }
+
+      const interestRatio = installment.total_amount > 0
+        ? (installment.total_amount - installment.principal_amount) / installment.total_amount
+        : 0;
+      const interestPortion = Number((amount * interestRatio).toFixed(2));
+      const principalPortion = Number((amount - interestPortion).toFixed(2));
+
+      const newPaid = Number(installment.paid_amount) + Number(amount);
+      const newStatus = newPaid >= Number(installment.amount) - 0.01 ? 'pago' : 'parcial';
+
+      const { rows: updated } = await client.query(
+        'UPDATE debt_installments SET paid_amount = $1, status = $2 WHERE id = $3 RETURNING *',
+        [newPaid, newStatus, installmentId]
+      );
+
+      await client.query(
+        `INSERT INTO debt_payments (debt_id, installment_id, amount, principal_portion, interest_portion, payment_method, notes, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [installment.debt_id, installmentId, amount, principalPortion, interestPortion, paymentMethod, notes || null, req.user.id]
+      );
+
+      // Pagar a parcela é dinheiro saindo do caixa.
+      await client.query(
+        `INSERT INTO cash_movements (direction, category, amount, description, reference_type, reference_id, created_by)
+         VALUES ('saida','divida_paga',$1,$2,'debt_installment',$3,$4)`,
+        [amount, `Pagamento de dívida - ${installment.creditor_name}`, installmentId, req.user.id]
+      );
+
+      const { rows: pendingCount } = await client.query(
+        `SELECT COUNT(*) FROM debt_installments WHERE debt_id = $1 AND status NOT IN ('pago','cancelado')`,
+        [installment.debt_id]
+      );
+      const debtStatus = Number(pendingCount[0].count) === 0 ? 'pago' : 'parcial';
+      await client.query('UPDATE debts SET status = $1 WHERE id = $2', [debtStatus, installment.debt_id]);
+
+      return updated[0];
+    });
+
+    await logAudit({ userId: req.user.id, action: 'payment', tableName: 'debt_installments', recordId: installmentId, newData: result, req });
+    res.json({ installment: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Edita um pagamento já lançado (valor, divisão juros/principal, data, forma
+ * de pagamento, observações) — espelho de editLoanPayment. Em vez de
+ * sobrescrever o lançamento de caixa original, lança um ajuste no caixa com a
+ * diferença entre o valor antigo e o novo.
+ */
+async function editDebtPayment(req, res, next) {
+  try {
+    const paymentId = Number(req.params.id);
+    const { interestAmount = 0, principalAmount = 0, paymentDate, paymentMethod, notes } = req.body;
+    const newInterest = Number(interestAmount) || 0;
+    const newPrincipal = Number(principalAmount) || 0;
+    const newTotal = Number((newInterest + newPrincipal).toFixed(2));
+
+    if (newTotal <= 0) return res.status(400).json({ error: 'Informe ao menos um valor de juros ou de abatimento do capital.' });
+    if (!PAYMENT_METHODS.includes(paymentMethod)) return res.status(400).json({ error: 'Forma de pagamento inválida.' });
+
+    const result = await withTransaction(async (client) => {
+      const { rows: paymentRows } = await client.query(
+        `SELECT dp.*, d.creditor_name, d.status AS debt_status FROM debt_payments dp
+         JOIN debts d ON d.id = dp.debt_id
+         WHERE dp.id = $1 FOR UPDATE`,
+        [paymentId]
+      );
+      if (paymentRows.length === 0) {
+        const err = new Error('Pagamento não encontrado.');
+        err.status = 404;
+        throw err;
+      }
+      const oldPayment = paymentRows[0];
+      const oldTotal = Number(oldPayment.amount);
+
+      // Se o pagamento está ligado a uma parcela específica, ajusta o valor
+      // pago dela pela diferença e recalcula o status.
+      if (oldPayment.installment_id) {
+        const { rows: instRows } = await client.query(
+          'SELECT * FROM debt_installments WHERE id = $1 FOR UPDATE', [oldPayment.installment_id]
+        );
+        if (instRows.length > 0) {
+          const inst = instRows[0];
+          const deltaAmount = Number((newTotal - oldTotal).toFixed(2));
+          const newPaid = Number((Number(inst.paid_amount) + deltaAmount).toFixed(2));
+          if (newPaid < -0.01) {
+            const err = new Error('Essa edição deixaria o valor pago da parcela negativo.');
+            err.status = 400;
+            throw err;
+          }
+          if (newPaid > Number(inst.amount) + 0.01) {
+            const err = new Error(`O novo valor excede o total da parcela (R$ ${Number(inst.amount).toFixed(2)}).`);
+            err.status = 400;
+            throw err;
+          }
+          const clampedPaid = Math.max(newPaid, 0);
+          const newInstallmentStatus = clampedPaid <= 0.01 ? 'pendente'
+            : (clampedPaid >= Number(inst.amount) - 0.01 ? 'pago' : 'parcial');
+          await client.query(
+            'UPDATE debt_installments SET paid_amount = $1, status = $2 WHERE id = $3',
+            [clampedPaid, newInstallmentStatus, inst.id]
+          );
+        }
+      }
+
+      const { rows: updatedRows } = await client.query(
+        `UPDATE debt_payments SET amount = $1, principal_portion = $2, interest_portion = $3,
+           payment_method = $4, payment_date = COALESCE($5, payment_date), notes = $6
+         WHERE id = $7 RETURNING *`,
+        [newTotal, newPrincipal, newInterest, paymentMethod, paymentDate || null,
+         notes !== undefined ? (notes || null) : oldPayment.notes, paymentId]
+      );
+      const updatedPayment = updatedRows[0];
+
+      // Ajusta o caixa apenas pela diferença, preservando o lançamento original.
+      const deltaTotal = Number((newTotal - oldTotal).toFixed(2));
+      if (Math.abs(deltaTotal) > 0.001) {
+        await client.query(
+          `INSERT INTO cash_movements (direction, category, amount, description, reference_type, reference_id, created_by)
+           VALUES ($1,'divida_paga',$2,$3,'debt_payment',$4,$5)`,
+          [deltaTotal > 0 ? 'saida' : 'entrada', Math.abs(deltaTotal),
+           `Ajuste de pagamento (edição) - ${oldPayment.creditor_name}`, paymentId, req.user.id]
+        );
+      }
+
+      // Recalcula o status geral da dívida com base nas parcelas.
+      if (!['cancelado'].includes(oldPayment.debt_status)) {
+        const { rows: pendingCount } = await client.query(
+          `SELECT COUNT(*) FROM debt_installments WHERE debt_id = $1 AND status NOT IN ('pago','cancelado')`,
+          [oldPayment.debt_id]
+        );
+        const { rows: paidSum } = await client.query(
+          `SELECT COALESCE(SUM(paid_amount), 0) AS total FROM debt_installments WHERE debt_id = $1`,
+          [oldPayment.debt_id]
+        );
+        let debtStatus;
+        if (Number(pendingCount[0].count) === 0) debtStatus = 'pago';
+        else if (Number(paidSum[0].total) > 0) debtStatus = 'parcial';
+        else debtStatus = 'ativo';
+        await client.query('UPDATE debts SET status = $1 WHERE id = $2', [debtStatus, oldPayment.debt_id]);
+      }
+
+      return { oldPayment, updatedPayment };
+    });
+
+    await logAudit({
+      userId: req.user.id, action: 'update', tableName: 'debt_payments', recordId: paymentId,
+      oldData: result.oldPayment, newData: result.updatedPayment, req,
+    });
+    res.json({ payment: result.updatedPayment });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Lista todos os pagamentos que tiveram alguma parcela de juros — espelho de
+ * listInterestPayments, usado pelo botão "Juros pagos" em Dívidas.
+ */
+async function listInterestPaymentsDebt(req, res, next) {
+  try {
+    const { rows } = await query(
+      `SELECT dp.*, d.creditor_name, di.due_date AS installment_due_date
+       FROM debt_payments dp
+       JOIN debts d ON d.id = dp.debt_id
+       LEFT JOIN debt_installments di ON di.id = dp.installment_id
+       WHERE dp.interest_portion > 0
+       ORDER BY dp.payment_date DESC`
+    );
+    const total = rows.reduce((sum, r) => sum + Number(r.interest_portion), 0);
+    res.json({ payments: rows, total });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Aba "Juros por mês" de Dívidas: mostra todas as parcelas de todas as
+ * dívidas (pagas ou não) já com a data de vencimento e o juro previsto para
+ * aquele mês — espelho de listInstallmentsSchedule.
+ */
+async function listDebtInstallmentsSchedule(req, res, next) {
+  try {
+    await refreshOverdueDebts();
+    const { rows } = await query(
+      `SELECT di.*, d.creditor_name, d.is_open_ended
+       FROM debt_installments di
+       JOIN debts d ON d.id = di.debt_id
+       WHERE d.deleted_at IS NULL AND di.status <> 'cancelado'
+       ORDER BY di.due_date ASC`
+    );
+    const totalInterest = rows.reduce((sum, r) => sum + Number(r.interest_amount), 0);
+    res.json({ installments: rows, totalInterest });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function updateDebtInstallment(req, res, next) {
   try {
     const id = Number(req.params.id);
@@ -392,5 +645,6 @@ async function cancelDebt(req, res, next) {
 }
 
 module.exports = {
-  listDebts, getDebt, createDebt, updateDebt, payDebt, updateDebtInstallment, cancelDebt,
+  listDebts, getDebt, createDebt, updateDebt, payDebt, payDebtInstallment, editDebtPayment,
+  listInterestPaymentsDebt, listDebtInstallmentsSchedule, updateDebtInstallment, cancelDebt,
 };
